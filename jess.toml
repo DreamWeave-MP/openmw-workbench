@@ -1,0 +1,31 @@
+manifest_version = 1
+
+[package]
+id = "org.dreamweave.openmw-workbench"
+version = "0.1.0"
+jess_api = "1"
+include = ["src", "examples"]
+tests = ["tests/run.luau"]
+
+[dependencies]
+"org.dreamweave.dreamwind" = "0.1.0"
+
+[modules]
+"@openmw/workbench" = "src/init.luau"
+"@openmw/workbench/model" = "src/model.luau"
+"@openmw/workbench/review" = "src/review.luau"
+"@openmw/workbench/graph" = "src/graph.luau"
+"@openmw/workbench/content" = "src/content.luau"
+"@openmw/workbench/knowledge" = "src/knowledge.luau"
+
+[[layer]]
+id = "openmw.workbench"
+requires = ["dream.tes3", "dream.vfs", "dream.nif", "dream.saves"]
+exports = [
+  "@openmw/workbench",
+  "@openmw/workbench/model",
+  "@openmw/workbench/review",
+  "@openmw/workbench/graph",
+  "@openmw/workbench/content",
+  "@openmw/workbench/knowledge",
+]
