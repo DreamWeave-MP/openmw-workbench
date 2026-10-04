@@ -1,0 +1,109 @@
+--!strict
+--!native
+local workbench = require '@openmw/workbench'
+local test = require '@jess/test'
+local expect = test.expect
+local suite = test.new()
+
+suite.describe('knowledge boundary', function()
+  suite.it('keeps OpenMW facts out of the generic Jess analyzer', function()
+    expect(workbench.knowledge.apiContexts['openmw.world'][1]).toBe('global')
+    expect(workbench.style.analysis ~= nil).toBeTruthy()
+  end)
+
+  suite.it('uses source-derived local to player package inheritance', function()
+    local contexts = workbench.knowledge.apiContexts['openmw.animation']
+    expect(contexts).toEqual { 'local', 'player' }
+  end)
+
+  suite.it('derives engine handler context from OpenMW registrations', function()
+    local onFrame = workbench.knowledge.engineHandlers.onFrame
+    expect(onFrame.contexts).toEqual { 'player', 'menu' }
+    expect(onFrame.hot).toBe(true)
+  end)
+
+  suite.it('flattens documented nested API namespaces from LDoc types', function()
+    local firstPerson = workbench.knowledge.memberContract('openmw.camera', 'MODE.FirstPerson')
+    expect(firstPerson ~= nil).toBe(true)
+    expect(workbench.knowledge.contract.source.luaApiRevision).toBe(161)
+  end)
+
+  suite.it('preserves documented parameter names for source-content linking', function()
+    local createObject = workbench.knowledge.memberContract('openmw.world', 'createObject')
+    expect(createObject.params).toEqual { 'recordId', 'count' }
+  end)
+
+  suite.it('distinguishes shipped engine-internal APIs from public docs', function()
+    local internal = workbench.knowledge.contract.engineInternalMembers['openmw.world']
+    expect(internal['_runStandardActivationAction'] ~= nil).toBe(true)
+    expect(workbench.knowledge.memberContract('openmw.world', '_runStandardActivationAction')).toBe(nil)
+  end)
+
+  suite.it('derives storage mutability from package construction', function()
+    expect(workbench.knowledge.storageMutability.globalSection.global).toBe('mutable')
+    expect(workbench.knowledge.storageMutability.globalSection['local']).toBe('readonly')
+    expect(workbench.knowledge.storageMutability.playerSection.load).toBe('readonly')
+  end)
+
+
+  suite.it('retains source-derived API parameter names for semantic linking', function()
+    local createObject = workbench.knowledge.memberContract('openmw.world', 'createObject')
+    expect(createObject.params).toEqual { 'recordId', 'count' }
+  end)
+
+  suite.it('maps OpenMW object types to ESM record tags from types.cpp', function()
+    expect(workbench.knowledge.contract.objectTypeTags.Potion).toBe('ALCH')
+    expect(workbench.knowledge.contract.objectTypeTags.Miscellaneous).toBe('MISC')
+    expect(workbench.knowledge.contract.objectTypeTags.Weapon).toBe('WEAP')
+  end)
+end)
+
+
+suite.describe('compact SQL index', function()
+  suite.it('lowers AST facts into an integer-backed query store', function()
+    local compact = require '@openmw/workbench/compact'
+    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    expect(index.stats.sources).toBe(2)
+    expect(index.stats.nativeBytes > 0).toBeTruthy()
+    expect(index.stats.rowBytes.reference).toBe(6)
+    expect(index.stats.references <= index.stats.calls + index.stats.members).toBeTruthy()
+
+    local calls = index:query([[SELECT source_id, line, target
+      FROM calls
+      WHERE module = 'openmw.ui'
+      LIMIT 10]])
+    expect(#calls.rows).toBe(1)
+    expect(calls.rows[1].target).toBe('openmw.ui.create')
+  end)
+
+  suite.it('keeps local require targets queryable without retaining ASTs', function()
+    local compact = require '@openmw/workbench/compact'
+    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    local rows = index:query([[SELECT module, target_source_id
+      FROM requires
+      WHERE target_source_id != 0]])
+    expect(#rows.rows).toBe(1)
+    expect(rows.rows[1].module).toBe('tests.compact-fixture.b')
+    expect(rows.rows[1].target_source_id > 0).toBeTruthy()
+  end)
+
+
+  suite.it('exposes packed symbol usage without aggregating reference rows', function()
+    local compact = require '@openmw/workbench/compact'
+    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    local result = index:query([[SELECT s.target, u.references, u.members, u.calls
+      FROM symbol_usage u
+      JOIN symbols s ON u.symbol_id = s.id
+      ORDER BY u.references DESC
+      LIMIT 2]])
+    expect(#result.rows).toBe(2)
+    expect(result.rows[1].target).toBe('require')
+    expect(result.rows[1].references).toBe(2)
+    expect(result.rows[1].calls).toBe(2)
+    expect(result.rows[2].target).toBe('openmw.ui.create')
+    expect(result.rows[2].members).toBe(1)
+    expect(result.rows[2].calls).toBe(1)
+  end)
+end)
+
+return suite

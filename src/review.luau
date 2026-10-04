@@ -37,6 +37,21 @@ local function finding(code: string, category: string, severity: string, confide
   }
 end
 
+local function findingPath(code: string, category: string, severity: string, confidence: string, path: string, line: number, message: string, detail: string?): Finding
+  return {
+    code = code,
+    category = category,
+    severity = severity :: any,
+    confidence = confidence :: any,
+    path = path,
+    line = line,
+    column = 1,
+    message = message,
+    detail = detail,
+    provenance = knowledge.ruleDocs[code],
+  }
+end
+
 local function hasCategory(enabled, category: string): boolean
   return enabled[category] == true
 end
@@ -58,6 +73,18 @@ local function allowedContexts(moduleName: string)
   return base and model.contextSet(base) or nil
 end
 
+local function violationCertainty(contexts, fact, allowed): (string, string)
+  local nested = (fact.functionDepth or 0) > 0 or (fact.conditionalDepth or 0) > 0
+  if not nested then return 'error', 'proven' end
+
+  -- Module reachability proves that a nested call *can be present* in a context,
+  -- not that this particular function/branch executes there. OpenMW's own shipped
+  -- Lua relies on shared helpers and player-only branches inside local modules.
+  -- Until the workbench has an interprocedural call graph/path proof, nested
+  -- context violations are deliberately inferred rather than promoted to errors.
+  return 'warning', 'inferred'
+end
+
 local function checkContexts(project, enabled, out)
   if not hasCategory(enabled, 'context') then return end
 
@@ -71,11 +98,11 @@ local function checkContexts(project, enabled, out)
       ))
     end
 
-    if #script.openmwRequires > 0 and not annotations.default and #script.manifests == 0 then
+    if #script.openmwRequires > 0 and next(script.contexts) == nil then
       table.insert(out, finding(
-        'context.missing', 'context', 'error', 'proven', script, script.openmwRequires[1].line,
-        'OpenMW-facing source has no context contract',
-        'Add the narrowest correct ---@omw-context annotation or declare the script through an .omwscripts root.'
+        'context.unresolved', 'context', 'warning', 'inferred', script, script.openmwRequires[1].line,
+        'OpenMW-facing source has no reachable context in the scanned workspace',
+        'Add an explicit ---@omw-context contract, include the .omwscripts entrypoint that reaches this module, or scan the complete project root.'
       ))
     end
 
@@ -91,9 +118,7 @@ local function checkContexts(project, enabled, out)
       end
 
       local used = required.contexts
-      local sourceLine = analysis.line(script.source, required.line)
-      local protectedProbe = string.find(sourceLine, 'pcall%s*%(%s*require') ~= nil
-        or string.find(sourceLine, 'pcall%s+require') ~= nil
+      local protectedProbe = required.require.protected == true
       if protectedProbe then
         table.insert(out, finding(
           'context.probe', 'context', 'warning', 'proven', script, required.line,
@@ -105,16 +130,19 @@ local function checkContexts(project, enabled, out)
 
       for context in used do
         if allowed[context] then continue end
+        local severity, confidence = violationCertainty(used, required.require, allowed)
         table.insert(out, finding(
-          'context.api', 'context', 'error', 'proven', script, required.line,
+          'context.api', 'context', severity, confidence, script, required.line,
           `'{required.module}' is unavailable in {context} context`,
-          `This require is reachable as {contextText(used)}; the module is available as {contextText(allowed)}.`
+          if confidence == 'proven'
+            then `This unguarded require executes in {contextText(used)}; the module is available as {contextText(allowed)}.`
+            else `This require is nested/guarded in source reachable as {contextText(used)}. Runtime flow may narrow it; annotate the region to make the check provable.`
         ))
       end
     end
   end
 
-  for _, edge in project.workspace.requireEdges do
+  for _, edge in project.requireEdges do
     local caller, target = project.byPath[edge.from], project.byPath[edge.to]
     if not caller or not target then continue end
     local callerContexts, callerNone = model.contextInfoForLine(caller.annotations, edge.line)
@@ -126,10 +154,156 @@ local function checkContexts(project, enabled, out)
     for context in used do
       if allowed[context] then continue end
       table.insert(out, finding(
-        'context.require-boundary', 'context', 'error', 'proven', caller, edge.line,
-        `local require crosses into a module that excludes {context}`,
-        `{edge.module} resolves to {target.path}, whose context contract is {contextText(allowed)}.`
+        'context.require-boundary', 'context', 'warning', 'inferred', caller, edge.line,
+        `local require crosses into a module annotation that excludes {context}`,
+        `{edge.module} resolves to {target.path}, whose declared context contract is {contextText(allowed)}. This is a source-contract mismatch, not by itself proof that OpenMW rejects the module at runtime.`
       ))
+    end
+  end
+end
+
+local function contextsAt(script, line: number)
+  local annotated, none = model.contextInfoForLine(script.annotations, line)
+  if none then return script.contexts end
+  return annotated or script.contexts
+end
+
+local function firstMember(member: string): string
+  return string.match(member, '^([^.]+)') or member
+end
+
+local function canProveUnknownMember(module, memberName: string): boolean
+  local parent = string.match(memberName, '^(.*)%.[^.]+$')
+  if not parent then return true end
+  local parentSpec = module.members[parent]
+  return parentSpec ~= nil and parentSpec.expands == true
+end
+
+local function contextualMember(module, memberName: string)
+  local current: string? = memberName
+  while current do
+    local member = module.members[current]
+    if member and member.contexts then return member, current end
+    current = string.match(current, '^(.*)%.[^.]+$')
+  end
+  return nil, nil
+end
+
+local function checkApi(project, enabled, out)
+  if not hasCategory(enabled, 'api') then return end
+
+  for _, script in project.scripts do
+    local seen: { [string]: boolean } = {}
+    for _, memberFact in script.source.members do
+      local moduleName, memberName = memberFact.module, memberFact.member
+      if not moduleName or not memberName or not string.find(moduleName, '^openmw%.') then continue end
+
+      if moduleName == 'openmw.interfaces' then continue end
+      local module = knowledge.moduleContract(moduleName)
+      if not module then continue end
+      local member = module.members[memberName]
+      local key = `{moduleName}:{memberName}:{memberFact.line}`
+      if seen[key] then continue end
+      seen[key] = true
+
+      if not member then
+        local internalByModule = knowledge.contract.engineInternalMembers[moduleName]
+        local internal = internalByModule and internalByModule[memberName]
+        if internal then
+          table.insert(out, finding(
+            'api.engine-internal', 'api', 'warning', 'proven', script, memberFact.line,
+            `'{moduleName}.{memberName}' is used by OpenMW's shipped Lua but is not part of the public Lua API specification`,
+            `This exact engine revision exposes the member to builtin Lua ({table.concat(internal.sources, ', ')}), but third-party compatibility is not promised by {module.spec}.`
+          ))
+        elseif canProveUnknownMember(module, memberName) then
+          table.insert(out, finding(
+            'api.unknown-member', 'api', 'warning', 'proven', script, memberFact.line,
+            `'{moduleName}.{memberName}' is absent from the shipped OpenMW Lua API specification`,
+            `Contract source: {module.spec}. The containing documented API table is closed in the shipped spec; undocumented engine members may still exist.`
+          ))
+        end
+        continue
+      end
+
+    end
+
+    for _, call in script.source.calls do
+      local moduleName, memberName = call.module, call.member
+      if not moduleName or not memberName or not string.find(moduleName, '^openmw%.') then continue end
+
+      if moduleName == 'openmw.interfaces' then
+        local interfaceName = firstMember(memberName)
+        local interface = knowledge.contract.modules['openmw.interfaces'].interfaceMembers[interfaceName]
+        if interface then
+          local allowed = model.contextSet(interface.contexts)
+          local used = contextsAt(script, call.line)
+          for context in used do
+            if allowed[context] then continue end
+            local key = `interface.context:{script.path}:{call.line}:{interfaceName}:{context}`
+            if seen[key] then continue end
+            seen[key] = true
+            local severity, confidence = violationCertainty(used, call, allowed)
+            table.insert(out, finding(
+              'interface.context', 'interfaces', severity, confidence, script, call.line,
+              `built-in interface '{interfaceName}' is invoked from {context} context`,
+              if confidence == 'proven'
+                then `OpenMW's own builtin script registrations provide it in {contextText(allowed)}.`
+                else `This shared/nested call is reachable from {context}; runtime call flow may narrow it. Annotate the narrower region to make the check provable.`
+            ))
+          end
+        end
+        continue
+      end
+
+      local module = knowledge.moduleContract(moduleName)
+      if not module then continue end
+      local contextual, contextualPath = contextualMember(module, memberName)
+      if contextual then
+        local allowed = model.contextSet(contextual.contexts)
+        local used = contextsAt(script, call.line)
+        for context in used do
+          if allowed[context] then continue end
+          local key = `api.member-context:{script.path}:{call.line}:{moduleName}:{contextualPath}:{context}`
+          if seen[key] then continue end
+          seen[key] = true
+          local severity, confidence = violationCertainty(used, call, allowed)
+          table.insert(out, finding(
+            'api.member-context', 'api', severity, confidence, script, call.line,
+            `'{moduleName}.{memberName}' is invoked where '{moduleName}.{contextualPath}' is unavailable in {context} context`,
+            if confidence == 'proven'
+              then `The API namespace/member is installed in {contextText(allowed)} according to {contextual.contextSource or module.spec}.`
+              else `This shared/nested call is reachable from {context}; runtime call flow may narrow it. The API namespace/member is installed in {contextText(allowed)}.`
+          ))
+        end
+      end
+
+      local member = knowledge.memberContract(moduleName, memberName)
+      if not member or member.kind ~= 'function' then continue end
+
+      local uncertain = false
+      for _, arg in call.expr.args do
+        if arg.kind == 'ExprVarargs' then
+          uncertain = true
+          break
+        end
+      end
+
+      if uncertain then continue end
+
+      local count = #call.expr.args
+      local explicitSelf = if member.method and not call.expr.self then 1 else 0
+      local minArgs = member.minArgs + explicitSelf
+      local maxArgs = if member.maxArgs == nil then nil else member.maxArgs + explicitSelf
+      local tooFew = count < minArgs
+      local tooMany = maxArgs ~= nil and count > maxArgs
+      if tooFew or tooMany then
+        local expected = if maxArgs == nil then `{minArgs}+` elseif minArgs == maxArgs then tostring(minArgs) else `{minArgs}..{maxArgs}`
+        table.insert(out, finding(
+          'api.arity', 'api', 'warning', 'inferred', script, call.line,
+          `'{moduleName}.{memberName}' is called with {count} argument(s); public spec declares {expected}`,
+          'Lua/sol bindings can sometimes tolerate extra or nil arguments, so this is an API-contract warning rather than a proof of runtime failure.'
+        ))
+      end
     end
   end
 end
@@ -164,21 +338,25 @@ local function checkHandlers(project, enabled, out)
       local allowed = model.contextSet(spec.contexts)
       for context in script.contexts do
         if allowed[context] then continue end
+        local severity, confidence = violationCertainty(script.contexts, handler, allowed)
         table.insert(out, finding(
-          'handler.context', 'handlers', 'error', 'proven', script, handler.line,
+          'handler.context', 'handlers', severity, confidence, script, handler.line,
           `'{handler.name}' is not valid in {context} context`,
-          `Handler contexts: {contextText(allowed)}; script contexts: {contextText(script.contexts)}.`
+          if confidence == 'proven'
+            then `Handler contexts: {contextText(allowed)}; script contexts: {contextText(script.contexts)}.`
+            else `The handler is installed behind/nested in runtime flow reachable from {context}; player LocalScripts receive player-only handlers/packages, so flow may narrow execution. Handler contexts: {contextText(allowed)}.`
         ))
       end
 
       local func = functionValue(script, handler)
       if func then
         local count = #func.args
-        if count < spec.minArgs or count > spec.maxArgs then
+        if count > spec.argsMax then
+          local expected = if spec.argsMin == spec.argsMax then tostring(spec.argsMin) else `{spec.argsMin}..{spec.argsMax}`
           table.insert(out, finding(
-            'handler.signature', 'handlers', 'error', 'proven', script, handler.line,
-            `'{handler.name}' has {count} parameter(s), expected {spec.minArgs}..{spec.maxArgs}`,
-            nil
+            'handler.signature', 'handlers', 'note', 'inferred', script, handler.line,
+            `'{handler.name}' declares {count} named parameter(s); engine supplies {expected}`,
+            'OpenMW supplies fewer callback values than this function names. Lua fills the remainder with nil, so this is legal but often indicates a mistaken handler signature.'
           ))
         end
       else
@@ -214,6 +392,20 @@ local function saveHasVersion(script, handler): boolean
     for _, expr in stat.list do
       local value = analysis.resolve(script.source, expr)
       if value.kind == 'ExprTable' and analysis.resolvedTableField(script.source, value, 'version') then return true end
+    end
+  end
+  return false
+end
+
+local function saveReturnsData(script, handler): boolean
+  local func = functionValue(script, handler)
+  if not func then return true end -- opaque/indirect: remain conservative
+  local returns = {}
+  findReturns(func.body, returns)
+  for _, stat in returns do
+    for _, expr in stat.list do
+      local value = analysis.resolve(script.source, expr)
+      if value.kind ~= 'ExprConstantNil' then return true end
     end
   end
   return false
@@ -271,7 +463,8 @@ local function checkLifecycle(project, enabled, out)
 
   for _, script in project.scripts do
     local handlers = handlerMap(script)
-    if handlers.onSave and not handlers.onLoad then
+    local savesData = handlers.onSave and saveReturnsData(script, handlers.onSave) or false
+    if handlers.onSave and savesData and not handlers.onLoad then
       table.insert(out, finding(
         'lifecycle.save-pair', 'lifecycle', 'error', 'proven', script, handlers.onSave.line,
         'onSave exists without onLoad',
@@ -279,7 +472,7 @@ local function checkLifecycle(project, enabled, out)
       ))
     end
 
-    if handlers.onSave and not saveHasVersion(script, handlers.onSave) then
+    if handlers.onSave and savesData and not saveHasVersion(script, handlers.onSave) then
       table.insert(out, finding(
         'lifecycle.unversioned-save', 'lifecycle', 'warning', 'inferred', script, handlers.onSave.line,
         'saved state has no statically visible version field',
@@ -319,6 +512,23 @@ local function checkStorage(project, enabled, out)
     local hot = hotHandlers(script)
     for _, op in script.storageOperations do
       if op.access ~= 'write' then continue end
+
+      local constructor = `{op.scope}Section`
+      local mutability = knowledge.storageMutability[constructor]
+      if mutability then
+        local used = contextsAt(script, op.line)
+        for context in used do
+          if mutability[context] ~= 'readonly' then continue end
+          local severity, confidence = violationCertainty(used, op)
+          table.insert(out, finding(
+            'storage.readonly-write', 'storage', severity, confidence, script, op.line,
+            `write through {constructor} section is read-only in {context} context`,
+            if confidence == 'proven'
+              then 'OpenMW constructs this section view as read-only in components/lua/storage.cpp; mutating operations throw at runtime.'
+              else 'The section is read-only in this reachable context, but this write is nested/guarded and runtime call flow may restrict it.'
+          ))
+        end
+      end
 
       if op.functionDepth == 0 then
         table.insert(out, finding(
@@ -410,16 +620,19 @@ local function checkInterfaces(project, enabled, out)
   for name, scripts in providers do
     if #scripts < 2 then continue end
 
-    for _, script in scripts do
+    for index, script in scripts do
+      local overlaps = {}
+      for otherIndex, other in scripts do
+        if index == otherIndex or not model.contextOverlap(script.contexts, other.contexts) then continue end
+        table.insert(overlaps, other.path)
+      end
+
+      if #overlaps == 0 then continue end
+      table.sort(overlaps)
       table.insert(out, finding(
-        'interface.collision', 'interfaces', 'error', 'proven', script, script.interface.line,
-        `interface '{name}' is provided by multiple scanned scripts`,
-        table.concat((function()
-          local paths = {}
-          for _, other in scripts do table.insert(paths, other.path) end
-          table.sort(paths)
-          return paths
-        end)(), ', ')
+        'interface.override-chain', 'interfaces', 'note', 'proven', script, script.interface.line,
+        `interface '{name}' has multiple providers in overlapping scanned contexts`,
+        `OpenMW supports this as an ordered override chain via onInterfaceOverride. Overlapping providers: {table.concat(overlaps, ', ')}`
       ))
     end
   end
@@ -477,6 +690,66 @@ local function checkPerformance(project, enabled, out)
   end
 end
 
+local function checkContent(project, enabled, out, linked)
+  if not hasCategory(enabled, 'content') or not linked then return end
+
+  for _, failure in linked.index.failures do
+    table.insert(out, findingPath(
+      'content.plugin-parse', 'content', 'warning', 'proven', failure.path, 1,
+      'Dreamwind could not parse a discovered content plugin', failure.error
+    ))
+  end
+
+  local reportedNifs: { [string]: boolean } = {}
+  for _, reference in linked.assetReferences do
+    if not reference.nif or reference.nif.ok then continue end
+    local path = reference.resolved or reference.value
+    local key = string.lower(string.gsub(path, '\\', '/'))
+    if reportedNifs[key] then continue end
+    reportedNifs[key] = true
+    table.insert(out, finding(
+      'content.nif-parse', 'content', 'warning', 'proven', reference.script, reference.line,
+      `Dreamwind could not parse resolved NIF '{path}'`,
+      reference.nif.error or 'NIF parsing failed without a diagnostic.'
+    ))
+  end
+
+  for _, record in linked.index.records do
+    for _, asset in record.assetLinks do
+      if not asset.nif or asset.nif.ok then continue end
+      local path = asset.resolved or asset.value
+      local key = string.lower(string.gsub(path, '\\', '/'))
+      if reportedNifs[key] then continue end
+      reportedNifs[key] = true
+      table.insert(out, findingPath(
+        'content.nif-parse', 'content', 'warning', 'proven', record.plugin, 1,
+        `Dreamwind could not parse resolved NIF '{path}' referenced by record '{record.id}'`,
+        asset.nif.error or 'NIF parsing failed without a diagnostic.'
+      ))
+    end
+  end
+
+  for _, reference in linked.recordReferences do
+    if not reference.typeHint or not reference.matches or #reference.matches == 0 then continue end
+    local expectedTag = knowledge.contract.objectTypeTags[reference.typeHint]
+    if not expectedTag then continue end
+    local compatible = false
+    local actual = {}
+    for _, record in reference.matches do
+      if record.tag == expectedTag then compatible = true end
+      table.insert(actual, record.tag or record.type or '?')
+    end
+
+    if compatible then continue end
+    table.sort(actual)
+    table.insert(out, finding(
+      'content.record-type', 'content', 'warning', 'inferred', reference.script, reference.line,
+      `'{reference.id}' is passed to types.{reference.typeHint}.record but scanned local content defines {table.concat(actual, '|')}`,
+      `OpenMW maps {reference.typeHint} to ESM record tag {expectedTag}. A different active load-order winner could still supply a compatible record.`
+    ))
+  end
+end
+
 local function compare(left: Finding, right: Finding): boolean
   if left.path ~= right.path then return left.path < right.path end
   if left.line ~= right.line then return left.line < right.line end
@@ -489,6 +762,7 @@ local function review(project, options)
   local enabled = enabledCategories(given.profile)
   local findings: { Finding } = {}
   checkContexts(project, enabled, findings)
+  checkApi(project, enabled, findings)
   checkHandlers(project, enabled, findings)
   checkLifecycle(project, enabled, findings)
   checkStorage(project, enabled, findings)
@@ -496,6 +770,7 @@ local function review(project, options)
   checkInterfaces(project, enabled, findings)
   checkUi(project, enabled, findings)
   checkPerformance(project, enabled, findings)
+  checkContent(project, enabled, findings, given.linked)
   table.sort(findings, compare)
 
   local errors, warnings, notes = 0, 0, 0
@@ -514,6 +789,8 @@ local function review(project, options)
       notes = notes,
       scripts = #project.scripts,
       manifests = #project.manifests,
+      contentConfigs = #project.contentConfigs,
+      configSources = #project.manifests + #project.contentConfigs,
       ok = errors == 0,
     },
   }

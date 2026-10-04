@@ -2,13 +2,14 @@ manifest_version = 1
 
 [package]
 id = "org.dreamweave.openmw-workbench"
-version = "0.1.0"
+version = "0.6.0"
 jess_api = "1"
-include = ["src", "examples"]
+include = ["src", "examples", "tests"]
 tests = ["tests/run.luau"]
 
 [dependencies]
 "org.dreamweave.dreamwind" = "0.1.0"
+"org.dreamweave.jessql" = "0.1.4"
 
 [modules]
 "@openmw/workbench" = "src/init.luau"
@@ -17,10 +18,18 @@ tests = ["tests/run.luau"]
 "@openmw/workbench/graph" = "src/graph.luau"
 "@openmw/workbench/content" = "src/content.luau"
 "@openmw/workbench/knowledge" = "src/knowledge.luau"
+"@openmw/workbench/contract" = "src/contract.luau"
+"@openmw/workbench/link" = "src/link.luau"
+"@openmw/workbench/compact" = "src/compact.luau"
+
+[[layer]]
+id = "openmw.index"
+requires = ["jessql.core"]
+exports = ["@openmw/workbench/compact"]
 
 [[layer]]
 id = "openmw.workbench"
-requires = ["dream.tes3", "dream.vfs", "dream.nif", "dream.saves"]
+requires = ["openmw.index", "dream.tes3", "dream.vfs", "dream.nif", "dream.saves"]
 exports = [
   "@openmw/workbench",
   "@openmw/workbench/model",
@@ -28,4 +37,6 @@ exports = [
   "@openmw/workbench/graph",
   "@openmw/workbench/content",
   "@openmw/workbench/knowledge",
+  "@openmw/workbench/contract",
+  "@openmw/workbench/link",
 ]

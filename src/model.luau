@@ -3,6 +3,7 @@
 local style = require '@jess/style'
 local analysis = style.analysis
 local knowledge = require '@openmw/workbench/knowledge'
+local content = require '@openmw/workbench/content'
 
 type Source = any
 type Expr = dream_luau_Expr
@@ -26,6 +27,28 @@ local ManifestContexts: { [string]: string } = {
   CUSTOM = 'local',
   LOCAL = 'local',
   LOAD = 'load',
+}
+
+-- OpenMW's text configuration accepts record type tags as auto-attached local scripts.
+-- Keep this list in lockstep with components/lua/configuration.cpp::typeTagsByName.
+local ManifestLocalTypeTags: { [string]: boolean } = {
+  ACTIVATOR = true,
+  ARMOR = true,
+  BOOK = true,
+  CLOTHING = true,
+  CONTAINER = true,
+  CREATURE = true,
+  DOOR = true,
+  INGREDIENT = true,
+  LIGHT = true,
+  MISC_ITEM = true,
+  NPC = true,
+  POTION = true,
+  WEAPON = true,
+  APPARATUS = true,
+  LOCKPICK = true,
+  PROBE = true,
+  REPAIR = true,
 }
 
 local function setFrom(list: { string }): ContextSet
@@ -109,6 +132,7 @@ local function contextAnnotations(text: string)
 
   for line in string.gmatch(text .. '\n', '([^\n]*)\n') do
     lineNumber += 1
+    if not string.find(line, '@omw-context', 1, true) then continue end
     local default = string.match(line, '^%s*%-%-%-@omw%-context%s+(.+)%s*$')
     local nextValue = string.match(line, '^%s*%-%-%-@omw%-context%-next%s+(.+)%s*$')
     local beginValue = string.match(line, '^%s*%-%-%-@omw%-context%-begin%s+(.+)%s*$')
@@ -135,6 +159,62 @@ local function contextAnnotations(text: string)
   while #stack > 0 do
     local active = table.remove(stack)
     table.insert(ranges, { first = active.first, last = lineNumber, contexts = active.contexts, none = active.none })
+  end
+
+  return {
+    default = fileContexts,
+    defaultNone = fileNone,
+    invalid = invalid,
+    nextOverrides = nextOverrides,
+    nextNone = nextNone,
+    ranges = ranges,
+  }
+end
+
+local function contextAnnotationsSource(source: Source)
+  local fileContexts: ContextSet? = nil
+  local fileNone = false
+  local invalid = {}
+  local nextOverrides: { [number]: ContextSet } = {}
+  local nextNone: { [number]: boolean } = {}
+  local ranges, stack = {}, {}
+  local lastLine = #source.lineStarts
+
+  for _, comment in source.comments do
+    if comment.kind ~= 'line' then continue end
+    local lineNumber = comment.line
+    local lineStart = source.lineStarts[lineNumber]
+    if not lineStart then continue end
+    local first = lineStart + comment.column - 1
+    local last = lineStart + comment.endColumn - 1
+    local line = string.sub(source.source, first, last)
+    if not string.find(line, '@omw-context', 1, true) then continue end
+    local default = string.match(line, '^%s*%-%-%-@omw%-context%s+(.+)%s*$')
+    local nextValue = string.match(line, '^%s*%-%-%-@omw%-context%-next%s+(.+)%s*$')
+    local beginValue = string.match(line, '^%s*%-%-%-@omw%-context%-begin%s+(.+)%s*$')
+    local isEnd = string.find(line, '^%s*%-%-%-@omw%-context%-end[%s%w_|]*$') ~= nil
+
+    if default then
+      local parsed, bad, none = parseContextExpression(default)
+      fileContexts, fileNone = parsed, none
+      for _, value in bad do table.insert(invalid, { line = lineNumber, value = value }) end
+    elseif nextValue then
+      local parsed, bad, none = parseContextExpression(nextValue)
+      nextOverrides[lineNumber], nextNone[lineNumber] = parsed, none
+      for _, value in bad do table.insert(invalid, { line = lineNumber, value = value }) end
+    elseif beginValue then
+      local parsed, bad, none = parseContextExpression(beginValue)
+      table.insert(stack, { contexts = parsed, none = none, first = lineNumber + 1 })
+      for _, value in bad do table.insert(invalid, { line = lineNumber, value = value }) end
+    elseif isEnd and #stack > 0 then
+      local active = table.remove(stack)
+      table.insert(ranges, { first = active.first, last = lineNumber - 1, contexts = active.contexts, none = active.none })
+    end
+  end
+
+  while #stack > 0 do
+    local active = table.remove(stack)
+    table.insert(ranges, { first = active.first, last = lastLine, contexts = active.contexts, none = active.none })
   end
 
   return {
@@ -178,6 +258,40 @@ local function normalize(path: string): string
   return string.lower(analysis.normalizePath(path))
 end
 
+local function openmwModuleIndex(workspace)
+  local index = {}
+  for _, path in workspace.files do
+    local lower = normalize(path)
+    local start = 1
+    while true do
+      local suffix = string.sub(lower, start)
+      local current = index[suffix]
+      if current == nil then index[suffix] = path
+      elseif current ~= path then index[suffix] = false end
+      local slash = string.find(lower, '/', start, true)
+      if not slash then break end
+      start = slash + 1
+    end
+  end
+  return index
+end
+
+local function openmwLocalModuleTarget(index, moduleName: string): string?
+  local candidate = string.lower(string.gsub(moduleName, '%.', '/'))
+  local suffixes = { `{candidate}.lua`, `{candidate}.luau`, `{candidate}/init.lua`, `{candidate}/init.luau` }
+  local match: string? = nil
+  for _, suffix in suffixes do
+    local value = index[suffix]
+    if value == false then return nil end
+
+    if type(value) == 'string' then
+      if match and match ~= value then return nil end
+      match = value
+    end
+  end
+  return match
+end
+
 local function collectManifests(roots: { string }): { string }
   local found = {}
 
@@ -190,7 +304,8 @@ local function collectManifests(roots: { string }): { string }
       return
     end
 
-    if jess.fs.isFile(path) and string.find(string.lower(path), '%.omwscripts$') then
+    local lower = string.lower(path)
+    if jess.fs.isFile(path) and (string.find(lower, '%.omwscripts$') or string.find(lower, '%.omwscripts%.in$')) then
       table.insert(found, analysis.normalizePath(path))
     end
   end
@@ -198,6 +313,56 @@ local function collectManifests(roots: { string }): { string }
   for _, root in roots do visit(root) end
   table.sort(found)
   return found
+end
+
+local function collectContentConfigs(roots: { string }): { string }
+  local found = {}
+
+  local function visit(path: string)
+    if jess.fs.isDir(path) then
+      for _, name in jess.fs.list(path) do
+        if string.sub(name, 1, 1) == '.' or name == 'target' or name == 'node_modules' then continue end
+        visit(jess.fs.join(path, name))
+      end
+      return
+    end
+
+    local lower = string.lower(path)
+    if jess.fs.isFile(path) and (string.find(lower, '%.omwaddon$') or string.find(lower, '%.omwgame$')) then
+      table.insert(found, analysis.normalizePath(path))
+    end
+  end
+
+  for _, root in roots do visit(root) end
+  table.sort(found)
+  return found
+end
+
+local function collectConfigs(roots: { string }): ({ string }, { string })
+  local manifests, contentConfigs = {}, {}
+
+  local function visit(path: string)
+    if jess.fs.isDir(path) then
+      for _, name in jess.fs.list(path) do
+        if string.sub(name, 1, 1) == '.' or name == 'target' or name == 'node_modules' then continue end
+        visit(jess.fs.join(path, name))
+      end
+      return
+    end
+
+    if not jess.fs.isFile(path) then return end
+    local lower = string.lower(path)
+    if string.find(lower, '%.omwscripts$') or string.find(lower, '%.omwscripts%.in$') then
+      table.insert(manifests, analysis.normalizePath(path))
+    elseif string.find(lower, '%.omwaddon$') or string.find(lower, '%.omwgame$') then
+      table.insert(contentConfigs, analysis.normalizePath(path))
+    end
+  end
+
+  for _, root in roots do visit(root) end
+  table.sort(manifests)
+  table.sort(contentConfigs)
+  return manifests, contentConfigs
 end
 
 local function parseManifest(path: string, text: string)
@@ -209,18 +374,70 @@ local function parseManifest(path: string, text: string)
     local stripped = string.match(line, '^%s*(.-)%s*$') or ''
     if stripped == '' or string.sub(stripped, 1, 1) == '#' then continue end
 
-    local kind, script = string.match(stripped, '^([A-Za-z]+)%s*:%s*(.-)%s*$')
-    if not kind or not script then continue end
-    local context = ManifestContexts[string.upper(kind)]
-    if not context then continue end
+    local tagText, script = string.match(stripped, '^([^:]+)%s*:%s*(.-)%s*$')
+    if not tagText or not script or string.lower(string.sub(script, -4)) ~= '.lua' then continue end
 
-    table.insert(declarations, {
-      manifest = path,
-      line = lineNumber,
-      path = analysis.normalizePath(script),
-      normalizedPath = normalize(script),
-      context = context,
-    })
+    local contexts: { [string]: boolean } = {}
+    for rawTag in string.gmatch(tagText, '[^,%s]+') do
+      local tag = string.upper(rawTag)
+      local context = ManifestContexts[tag]
+      if context then
+        contexts[context] = true
+      elseif ManifestLocalTypeTags[tag] then
+        contexts['local'] = true
+      end
+    end
+
+    for context in contexts do
+      table.insert(declarations, {
+        manifest = path,
+        line = lineNumber,
+        path = analysis.normalizePath(script),
+        normalizedPath = normalize(script),
+        context = context,
+        tags = tagText,
+      })
+    end
+  end
+
+  return declarations
+end
+
+local function parseContentConfig(path: string)
+  local declarations = {}
+  -- Dreamwind rejects malformed/non-plugin content paths; keep scanning source roots when one cannot be decoded.
+  local ok, scripts = pcall(content.scriptConfig, path)
+  if not ok or type(scripts) ~= 'table' then return declarations end
+
+  for index, script in scripts do
+    if type(script) ~= 'table' or type(script.path) ~= 'string' then continue end
+    local contexts: ContextSet = {}
+
+    if type(script.flags) == 'string' then
+      for rawTag in string.gmatch(script.flags, '[%u_]+') do
+        local context = ManifestContexts[rawTag]
+        if context then contexts[context] = true end
+      end
+    end
+
+    -- Type, record, and reference attachments are local-script configuration.
+    -- LUAL's display representation uses ESM record tags (NPC_, CREA, ...), so
+    -- the presence of one of these lists is the semantic fact we need here.
+    if type(script.types) == 'table' and next(script.types) ~= nil then contexts['local'] = true end
+    if type(script.records) == 'table' and next(script.records) ~= nil then contexts['local'] = true end
+    if type(script.refs) == 'table' and next(script.refs) ~= nil then contexts['local'] = true end
+
+    for context in contexts do
+      table.insert(declarations, {
+        manifest = path,
+        line = index,
+        path = analysis.normalizePath(script.path),
+        normalizedPath = normalize(script.path),
+        context = context,
+        tags = script.flags or 'LUAL local attachment',
+        sourceKind = 'content',
+      })
+    end
   end
 
   return declarations
@@ -233,6 +450,40 @@ local function sourceByScriptPath(workspace, scriptPath: string): Source?
     if candidate == wanted or string.sub(candidate, -#wanted) == wanted then return source end
   end
   return nil
+end
+
+local function openmwLocalRequireEdges(workspace)
+  local edges = {}
+  local seen, seenRequire = {}, {}
+  local moduleIndex = openmwModuleIndex(workspace)
+
+  local function add(from: string, to: string, moduleName: string, line: number)
+    local key = `{from}:{line}:{moduleName}:{to}`
+    if seen[key] then return end
+    seen[key] = true
+    seenRequire[`{from}:{line}:{moduleName}`] = true
+    table.insert(edges, { from = from, to = to, module = moduleName, line = line })
+  end
+
+  for _, edge in workspace.requireEdges do add(edge.from, edge.to, edge.module, edge.line) end
+
+  for _, source in workspace.sources do
+    local from = source.path :: string
+    for _, required in source.requires do
+      if string.sub(required.module, 1, 1) == '@' or string.find(required.module, '^openmw%.') then continue end
+      if seenRequire[`{from}:{required.line}:{required.module}`] then continue end
+
+      local target = openmwLocalModuleTarget(moduleIndex, required.module)
+      if target then add(from, target, required.module, required.line) end
+    end
+  end
+
+  table.sort(edges, function(left, right)
+    if left.from ~= right.from then return left.from < right.from end
+    if left.to ~= right.to then return left.to < right.to end
+    return left.line < right.line
+  end)
+  return edges
 end
 
 local function resolved(source: Source, expr: Expr?): Expr?
@@ -270,6 +521,8 @@ local function handlerTable(source: Source, tableName: string)
       name = entry.name,
       value = resolved(source, entry.value) or entry.value,
       line = entry.line,
+      functionDepth = 0,
+      conditionalDepth = 0,
       source = source,
     })
   end
@@ -287,6 +540,8 @@ local function handlerTable(source: Source, tableName: string)
         name = name,
         value = if assignment.value then resolved(source, assignment.value) or assignment.value else nil,
         line = assignment.line,
+        functionDepth = assignment.functionDepth,
+        conditionalDepth = assignment.conditionalDepth,
         source = source,
       })
     end
@@ -354,6 +609,7 @@ local function storageFacts(source: Source)
       access = access,
       line = call.line,
       functionDepth = call.functionDepth,
+      conditionalDepth = call.conditionalDepth,
       call = call,
     })
   end
@@ -402,20 +658,145 @@ local function contextsOverlap(left: ContextSet, right: ContextSet): boolean
   return false
 end
 
+local function isIdentifierByte(byte: number?): boolean
+  if not byte then return false end
+  return byte == 95 or (byte >= 48 and byte <= 57) or (byte >= 65 and byte <= 90) or (byte >= 97 and byte <= 122)
+end
+
+local function longBracketEnd(text: string, first: number): number?
+  if string.byte(text, first) ~= 91 then return nil end
+  local cursor = first + 1
+  while string.byte(text, cursor) == 61 do cursor += 1 end
+  if string.byte(text, cursor) ~= 91 then return nil end
+  local equals = cursor - first - 1
+  local closing = `]{string.rep('=', equals)}]`
+  local close = string.find(text, closing, cursor + 1, true)
+  if not close then return #text + 1 end
+  return close + #closing
+end
+
+local function normalizeOpenmwLua(text: string, _path: string): string
+  local edits = {}
+  local size = #text
+
+  if size >= 3 and string.byte(text, 1) == 239 and string.byte(text, 2) == 187 and string.byte(text, 3) == 191 then
+    table.insert(edits, { first = 1, last = 3 })
+  end
+
+  if not string.find(text, 'goto', 1, true) and not string.find(text, '::', 1, true) and #edits == 0 then return text end
+
+  local cursor = 1
+  while cursor <= size do
+    local byte = string.byte(text, cursor)
+
+    if byte == 45 and string.byte(text, cursor + 1) == 45 then
+      local longEnd = longBracketEnd(text, cursor + 2)
+      if longEnd then cursor = longEnd
+      else
+        local newline = string.find(text, '\n', cursor + 2, true)
+        cursor = if newline then newline + 1 else size + 1
+      end
+      continue
+    end
+
+    if byte == 34 or byte == 39 then
+      local quote = byte
+      cursor += 1
+      while cursor <= size do
+        local current = string.byte(text, cursor)
+        if current == 92 then cursor += 2
+        elseif current == quote then cursor += 1 break
+        else cursor += 1 end
+      end
+      continue
+    end
+
+    if byte == 91 then
+      local longEnd = longBracketEnd(text, cursor)
+      if longEnd then cursor = longEnd continue end
+    end
+
+    if byte == 58 and string.byte(text, cursor + 1) == 58 then
+      local name = cursor + 2
+      while true do
+        local space = string.byte(text, name)
+        if space == 32 or space == 9 or space == 11 or space == 12 then name += 1 else break end
+      end
+      local firstName = string.byte(text, name)
+      if isIdentifierByte(firstName) and not ((firstName or 0) >= 48 and (firstName or 0) <= 57) then
+        local finish = name + 1
+        while isIdentifierByte(string.byte(text, finish)) do finish += 1 end
+
+        while true do
+          local space = string.byte(text, finish)
+          if space == 32 or space == 9 or space == 11 or space == 12 then finish += 1 else break end
+        end
+
+        if string.byte(text, finish) == 58 and string.byte(text, finish + 1) == 58 then
+          table.insert(edits, { first = cursor, last = finish + 1 })
+          cursor = finish + 2
+          continue
+        end
+      end
+    end
+
+    if byte == 103 and string.sub(text, cursor, cursor + 3) == 'goto' then
+      local before = string.byte(text, cursor - 1)
+      local after = string.byte(text, cursor + 4)
+      if not isIdentifierByte(before) and (after == 32 or after == 9 or after == 11 or after == 12) then
+        local name = cursor + 4
+        while true do
+          local space = string.byte(text, name)
+          if space == 32 or space == 9 or space == 11 or space == 12 then name += 1 else break end
+        end
+        local firstName = string.byte(text, name)
+        if isIdentifierByte(firstName) and not ((firstName or 0) >= 48 and (firstName or 0) <= 57) then
+          local finish = name + 1
+          while isIdentifierByte(string.byte(text, finish)) do finish += 1 end
+          table.insert(edits, { first = cursor, last = finish - 1 })
+          cursor = finish
+          continue
+        end
+      end
+    end
+
+    cursor += 1
+  end
+
+  if #edits == 0 then return text end
+  table.sort(edits, function(left, right) return left.first < right.first end)
+  local out = {}
+  local first = 1
+  for _, edit in edits do
+    if edit.first < first then continue end
+    if edit.first > first then table.insert(out, string.sub(text, first, edit.first - 1)) end
+    table.insert(out, string.rep(' ', edit.last - edit.first + 1))
+    first = edit.last + 1
+  end
+
+  if first <= size then table.insert(out, string.sub(text, first)) end
+  return table.concat(out)
+end
+
 local function build(roots: { string })
-  local workspace = analysis.workspace(roots)
-  local manifests = collectManifests(roots)
+  local workspace = analysis.workspace(roots, { transform = normalizeOpenmwLua })
+  local requireEdges = openmwLocalRequireEdges(workspace)
+  local manifests, contentConfigs = collectConfigs(roots)
   local declarations = {}
   for _, path in manifests do
     local text = jess.fs.read(path) or ''
     for _, declaration in parseManifest(path, text) do table.insert(declarations, declaration) end
   end
 
+  for _, path in contentConfigs do
+    for _, declaration in parseContentConfig(path) do table.insert(declarations, declaration) end
+  end
+
   local annotationsByPath = {}
   local declaredByPath: { [string]: ContextSet } = {}
   local manifestByPath = {}
   for _, source in workspace.sources do
-    annotationsByPath[source.path] = contextAnnotations(source.source)
+    annotationsByPath[source.path] = contextAnnotationsSource(source)
   end
 
   for _, declaration in declarations do
@@ -443,7 +824,7 @@ local function build(roots: { string })
   local changed = true
   while changed do
     changed = false
-    for _, edge in workspace.requireEdges do
+    for _, edge in requireEdges do
       local caller = effective[edge.from]
       local target = effective[edge.to]
       if not caller or not target or setEmpty(caller) then continue end
@@ -503,7 +884,9 @@ local function build(roots: { string })
   local project = {
     roots = table.clone(roots),
     workspace = workspace,
+    requireEdges = requireEdges,
     manifests = manifests,
+    contentConfigs = contentConfigs,
     declarations = declarations,
     scripts = scripts,
     byPath = byPath,
@@ -525,4 +908,5 @@ return table.freeze {
   recordFields = recordFields,
   resolved = resolved,
   literalString = literalString,
+  normalizeLuaDialect = normalizeOpenmwLua,
 }
