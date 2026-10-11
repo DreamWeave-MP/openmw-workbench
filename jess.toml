@@ -8,7 +8,10 @@ include = ["src", "examples", "tests"]
 tests = ["tests/run.luau"]
 
 [dependencies]
-"org.dreamweave.dreamwind" = "0.1.0"
+"org.dreamweave.tes3" = "0.1"
+"org.dreamweave.vfs" = "0.1"
+"org.dreamweave.nif" = "0.1"
+"org.dreamweave.tes3-saves" = "0.1"
 "org.dreamweave.jessql" = "0.1.4"
 
 [modules]
@@ -29,7 +32,7 @@ exports = ["@openmw/workbench/compact"]
 
 [[layer]]
 id = "openmw.workbench"
-requires = ["openmw.index", "dream.tes3", "dream.vfs", "dream.nif", "dream.saves"]
+requires = ["openmw.index", "tes3.core", "vfs.core", "nif.core", "tes3-saves.core"]
 exports = [
   "@openmw/workbench",
   "@openmw/workbench/model",

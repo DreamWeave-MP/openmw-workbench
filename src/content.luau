@@ -2,10 +2,10 @@
 --!native
 -- Dreamwind-backed data-world adapters. The source analyzer remains independent of these modules;
 -- the full workbench layer activates them so source, content, VFS and NIF facts can be correlated.
-local tes3 = require '@dreamwind/tes3'
-local vfs = require '@dreamwind/vfs'
-local nif = require '@dreamwind/nif'
-local saves = require '@dreamwind/saves'
+local tes3 = require '@tes3'
+local vfs = require '@vfs'
+local nif = require '@nif'
+local saves = require '@tes3-saves'
 
 local function readBuffer(path: string)
   local bytes = jess.fs.readBuffer(path)
