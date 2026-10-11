@@ -4,17 +4,23 @@ local analysis = require('@jess/style').analysis
 local knowledge = require '@openmw/workbench/knowledge'
 local model = require '@openmw/workbench/model'
 
+type Severity = 'error' | 'warning' | 'note'
+type Confidence = 'proven' | 'inferred' | 'heuristic'
+
+--- Where a rule comes from, as the knowledge module's rule documentation records it.
+type Provenance = { source: string, docs: string, skill: string? }
+
 type Finding = {
   code: string,
   category: string,
-  severity: 'error' | 'warning' | 'note',
-  confidence: 'proven' | 'inferred' | 'heuristic',
+  severity: Severity,
+  confidence: Confidence,
   path: string,
   line: number,
   column: number,
   message: string,
   detail: string?,
-  provenance: any?,
+  provenance: Provenance?,
 }
 
 local function contextText(contexts): string
@@ -22,12 +28,12 @@ local function contextText(contexts): string
   return if #list == 0 then 'unknown' else table.concat(list, '|')
 end
 
-local function finding(code: string, category: string, severity: string, confidence: string, script, line: number, message: string, detail: string?): Finding
+local function finding(code: string, category: string, severity: Severity, confidence: Confidence, script, line: number, message: string, detail: string?): Finding
   return {
     code = code,
     category = category,
-    severity = severity :: any,
-    confidence = confidence :: any,
+    severity = severity,
+    confidence = confidence,
     path = script.path,
     line = line,
     column = 1,
@@ -37,12 +43,12 @@ local function finding(code: string, category: string, severity: string, confide
   }
 end
 
-local function findingPath(code: string, category: string, severity: string, confidence: string, path: string, line: number, message: string, detail: string?): Finding
+local function findingPath(code: string, category: string, severity: Severity, confidence: Confidence, path: string, line: number, message: string, detail: string?): Finding
   return {
     code = code,
     category = category,
-    severity = severity :: any,
-    confidence = confidence :: any,
+    severity = severity,
+    confidence = confidence,
     path = path,
     line = line,
     column = 1,
@@ -73,7 +79,7 @@ local function allowedContexts(moduleName: string)
   return base and model.contextSet(base) or nil
 end
 
-local function violationCertainty(contexts, fact, allowed): (string, string)
+local function violationCertainty(contexts, fact, allowed): (Severity, Confidence)
   local nested = (fact.functionDepth or 0) > 0 or (fact.conditionalDepth or 0) > 0
   if not nested then return 'error', 'proven' end
 
