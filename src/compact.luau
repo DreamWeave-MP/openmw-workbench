@@ -851,9 +851,11 @@ local function build(paths: { string } | string, options)
   local sourceProvider = { columns = sourceColumns, indexes = { id = true } }
 
   local function safeLimit(request, handled: boolean): number?
-    -- SQL LIMIT constrains result cardinality, not provider input cardinality. JessQL emits
-    -- limitHint only for non-aggregate direct scans; honor it only when pushed WHERE is complete.
-    if handled and request.whereComplete == true then return request.limitHint end
+    -- SQL LIMIT constrains result cardinality, not provider input cardinality. JessQL's `limit`
+    -- is the count a provider may stop at whatever order its rows come in; `limitHint` also
+    -- arrives under an ORDER BY, where only a provider handing its rows over in that order may
+    -- stop at it, and these iterators hand them over in stored order.
+    if handled and request.whereComplete == true then return request.limit end
     return nil
   end
 
@@ -877,7 +879,7 @@ local function build(paths: { string } | string, options)
 
   function sourceProvider.scan(request)
     local out = {}
-    local limit = request.limitHint or request.limit
+    local limit = request.limit
     local idEqual, pathEqual = nil, nil
     local handled = true
     for _, constraint in request.constraints do
@@ -1066,7 +1068,7 @@ local function build(paths: { string } | string, options)
 
     function provider.scan(request)
       local out = {}
-      local limit = request.limitHint or request.limit
+      local limit = request.limit
       local constraints, handled = {}, true
       local sourceEqual, symbolEqual = nil, nil
       for _, constraint in request.constraints do
@@ -1247,7 +1249,7 @@ local function build(paths: { string } | string, options)
   local requireProvider = { columns = requireColumns }
   function requireProvider.scan(request)
     local out = {}
-    local limit = request.limitHint or request.limit
+    local limit = request.limit
     local constraints, handled = {}, true
     for _, constraint in request.constraints do
       local rhs = constraint.value
@@ -1542,7 +1544,7 @@ local function build(paths: { string } | string, options)
   function usageProvider.scan(request)
     local iter = usageProvider.iterate(request)
     local rows = {}
-    local limit = request.limitHint or request.limit
+    local limit = if iter.ordered then request.limitHint else request.limit
     while true do
       local row = iter.next()
       if row == nil then break end
@@ -1579,7 +1581,7 @@ local function build(paths: { string } | string, options)
 
   function symbolProvider.scan(request)
     local out = {}
-    local limit = request.limitHint or request.limit
+    local limit = request.limit
     local idEqual, handled = nil, true
     for _, constraint in request.constraints do
       if constraint.op == '=' and constraint.column == 'id' then idEqual = constraint.value

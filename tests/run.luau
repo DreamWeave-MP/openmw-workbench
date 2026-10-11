@@ -115,6 +115,26 @@ suite.describe('compact SQL index', function()
     expect(result.rows[2].members).toBe(1)
     expect(result.rows[2].calls).toBe(1)
   end)
+
+  suite.it('limits an ordered query to the rows that sort first, not the rows stored first', function()
+    local compact = require '@openmw/workbench/compact'
+    local index = compact.build(Fixture, { caseInsensitiveModules = false })
+    local orderings = {
+      sources = 'id',
+      calls = 'line',
+      requires = 'source_id',
+      symbols = 'id',
+      symbol_usage = 'symbol_id',
+    }
+
+    for name, column in orderings do
+      local every = index:query(`SELECT {column} FROM {name} ORDER BY {column} DESC`)
+      local first = index:query(`SELECT {column} FROM {name} ORDER BY {column} DESC LIMIT 1`)
+      expect({ name, #every.rows > 1 }).toEqual { name, true }
+      expect(#first.rows).toBe(1)
+      expect({ name, first.rows[1][column] }).toEqual { name, every.rows[1][column] }
+    end
+  end)
 end)
 
 return suite
