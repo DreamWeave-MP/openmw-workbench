@@ -1,11 +1,11 @@
 --!strict
 --!native
-local style = require '@jess/style'
-local analysis = style.analysis
+local analysis = require '@jess/analysis'
 local knowledge = require '@openmw/workbench/knowledge'
 local content = require '@openmw/workbench/content'
 
-type Source = any
+type Source = analysis.Source
+type Workspace = analysis.Workspace
 type Expr = dream_luau_Expr
 type ContextSet = { [string]: boolean }
 
@@ -258,7 +258,7 @@ local function normalize(path: string): string
   return string.lower(analysis.normalizePath(path))
 end
 
-local function openmwModuleIndex(workspace)
+local function openmwModuleIndex(workspace: Workspace)
   local index = {}
   for _, path in workspace.files do
     local lower = normalize(path)
@@ -443,7 +443,7 @@ local function parseContentConfig(path: string)
   return declarations
 end
 
-local function sourceByScriptPath(workspace, scriptPath: string): Source?
+local function sourceByScriptPath(workspace: Workspace, scriptPath: string): Source?
   local wanted = normalize(scriptPath)
   for path, source in workspace.byPath do
     local candidate = normalize(path)
@@ -452,7 +452,7 @@ local function sourceByScriptPath(workspace, scriptPath: string): Source?
   return nil
 end
 
-local function openmwLocalRequireEdges(workspace)
+local function openmwLocalRequireEdges(workspace: Workspace)
   local edges = {}
   local seen, seenRequire = {}, {}
   local moduleIndex = openmwModuleIndex(workspace)
