@@ -8,6 +8,8 @@ local vfs = require '@vfs'
 local nif = require '@nif'
 local saves = require '@tes3-saves'
 
+export type StringField = tes3.StringField
+
 local function readBuffer(path: string)
   local bytes = jess.fs.readBuffer(path)
   if not bytes then error(`{path}: no such file`) end

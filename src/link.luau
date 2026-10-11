@@ -10,6 +10,48 @@ local model = require '@openmw/workbench/model'
 local content = require '@openmw/workbench/content'
 local knowledge = require '@openmw/workbench/knowledge'
 
+type NifTexture = {
+  record: number,
+  value: string,
+  resolved: string?,
+  candidates: { string },
+  resolution: string,
+}
+
+--- What decoding one NIF found: how much of it is reachable and the textures it names, or why it
+--- could not be read.
+type NifInspection = {
+  path: string,
+  ok: boolean,
+  reachableRecords: number?,
+  textures: { NifTexture },
+  error: string?,
+  textureError: string?,
+}
+
+type AssetLink = {
+  field: string,
+  value: string,
+  resolved: string?,
+  candidates: { string },
+  nif: NifInspection?,
+}
+
+type RecordLink = { field: string, value: string, matches: { IndexedRecord } }
+
+--- One record of an inspected plugin, under the identity the tes3 package gives it.
+type IndexedRecord = {
+  id: string,
+  normalizedId: string,
+  index: number,
+  plugin: string,
+  type: string?,
+  tag: string?,
+  fields: { content.StringField },
+  assetLinks: { AssetLink },
+  recordLinks: { RecordLink },
+}
+
 local AssetFieldRoots: { [string]: string } = {
   mesh = 'meshes',
   model = 'meshes',
@@ -113,7 +155,7 @@ local function recordId(plugin, index: number): string?
   return value
 end
 
-local function recordStrings(plugin, index: number)
+local function recordStrings(plugin, index: number): { content.StringField }
   -- stringFields can reject unsupported record layouts; an empty field set still leaves the record indexable.
   local ok, fields = pcall(content.tes3.records.stringFields, plugin, index)
   if not ok or type(fields) ~= 'table' then return {} end
@@ -149,12 +191,12 @@ local function resolveAsset(vfs, fieldName: string?, path: string)
   return nil, candidates
 end
 
-local function inspectNif(index, path: string)
+local function inspectNif(index, path: string): NifInspection
   local key = normalized(path)
   local cached = index.nifCache[key]
   if cached then return cached end
 
-  local result = {
+  local result: NifInspection = {
     path = path,
     ok = false,
     reachableRecords = nil,
@@ -213,8 +255,8 @@ end
 local function buildIndex(roots: { string })
   local vfs = content.vfs.VFS.fromDirectories(roots)
   local plugins = collectPlugins(roots)
-  local records = {}
-  local byRecordId: { [string]: { any } } = {}
+  local records: { IndexedRecord } = {}
+  local byRecordId: { [string]: { IndexedRecord } } = {}
   local failures = {}
 
   for _, path in plugins do
@@ -230,7 +272,7 @@ local function buildIndex(roots: { string })
       if not id then continue end
       local typeName, typeTag = recordType(plugin, index)
       local fields = recordStrings(plugin, index)
-      local record = {
+      local record: IndexedRecord = {
         id = id,
         normalizedId = string.lower(id),
         index = index,
