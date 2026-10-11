@@ -129,16 +129,16 @@ local RuleDocs = {
     docs = 'cod3x/docs/cookbook/interface-contract.md',
   },
   ['content.record-type'] = {
-    source = 'OpenMW types/types.cpp object type map + Dreamwind TES3 record decoding',
+    source = 'OpenMW types/types.cpp object type map + the tes3 package\'s record decoding',
     docs = 'OpenMW Lua object type contract',
   },
   ['content.plugin-parse'] = {
-    source = 'Dreamwind TES3 decoder',
-    docs = 'Dreamwind content parsing',
+    source = 'The tes3 package\'s decoder',
+    docs = 'tes3 package content parsing',
   },
   ['content.nif-parse'] = {
-    source = 'Dreamwind NIF decoder + OpenMW VFS resolution',
-    docs = 'Dreamwind NIF parsing',
+    source = 'The nif package\'s decoder + OpenMW VFS resolution',
+    docs = 'nif package NIF parsing',
   },
   ['ui.layer'] = {
     source = 'OpenMW UI API spec + Cod3x UI policy',

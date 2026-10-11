@@ -696,7 +696,7 @@ local function checkContent(project, enabled, out, linked)
   for _, failure in linked.index.failures do
     table.insert(out, findingPath(
       'content.plugin-parse', 'content', 'warning', 'proven', failure.path, 1,
-      'Dreamwind could not parse a discovered content plugin', failure.error
+      'The tes3 package could not parse a discovered content plugin', failure.error
     ))
   end
 
@@ -709,7 +709,7 @@ local function checkContent(project, enabled, out, linked)
     reportedNifs[key] = true
     table.insert(out, finding(
       'content.nif-parse', 'content', 'warning', 'proven', reference.script, reference.line,
-      `Dreamwind could not parse resolved NIF '{path}'`,
+      `The nif package could not parse resolved NIF '{path}'`,
       reference.nif.error or 'NIF parsing failed without a diagnostic.'
     ))
   end
@@ -723,7 +723,7 @@ local function checkContent(project, enabled, out, linked)
       reportedNifs[key] = true
       table.insert(out, findingPath(
         'content.nif-parse', 'content', 'warning', 'proven', record.plugin, 1,
-        `Dreamwind could not parse resolved NIF '{path}' referenced by record '{record.id}'`,
+        `The nif package could not parse resolved NIF '{path}' referenced by record '{record.id}'`,
         asset.nif.error or 'NIF parsing failed without a diagnostic.'
       ))
     end
