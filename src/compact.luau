@@ -944,11 +944,10 @@ local function build(paths: { string } | string, options)
     local referenced = 0
     for rowId = 1, refs.rows do
       local symbol = refs:get(rowId, 3)
-      if symbol ~= 0 then
-        local offset = symbol * 3
-        writeU24(cursor, offset, readU24(cursor, offset) + 1)
-        referenced += 1
-      end
+      if symbol == 0 then continue end
+      local offset = symbol * 3
+      writeU24(cursor, offset, readU24(cursor, offset) + 1)
+      referenced += 1
     end
 
     local starts = buffer.create((symbolCount + 2) * 3)
