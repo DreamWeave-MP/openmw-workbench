@@ -5,6 +5,17 @@ local test = require '@jess/test'
 local expect = test.expect
 local suite = test.new()
 
+--- Where this file is, from its chunk name. `jess package test` runs the suite from whatever
+--- folder it was called in, so the fixture is named from here instead of from the working directory.
+local function here(): string
+  local source = debug.info(1, 's')
+  local first = string.sub(source, 1, 1)
+  local path = if first == '@' or first == '=' then string.sub(source, 2) else source
+  return string.match(path, '^(.*)/[^/]*$') or '.'
+end
+
+local Fixture = `{here()}/compact-fixture`
+
 suite.describe('knowledge boundary', function()
   suite.it('keeps OpenMW facts out of the generic Jess analyzer', function()
     expect(workbench.knowledge.apiContexts['openmw.world'][1]).toBe('global')
@@ -62,7 +73,7 @@ end)
 suite.describe('compact SQL index', function()
   suite.it('lowers AST facts into an integer-backed query store', function()
     local compact = require '@openmw/workbench/compact'
-    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    local index = compact.build(Fixture, { caseInsensitiveModules = false })
     expect(index.stats.sources).toBe(2)
     expect(index.stats.nativeBytes > 0).toBeTruthy()
     expect(index.stats.rowBytes.reference).toBe(6)
@@ -78,7 +89,7 @@ suite.describe('compact SQL index', function()
 
   suite.it('keeps local require targets queryable without retaining ASTs', function()
     local compact = require '@openmw/workbench/compact'
-    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    local index = compact.build(Fixture, { caseInsensitiveModules = false })
     local rows = index:query([[SELECT module, target_source_id
       FROM requires
       WHERE target_source_id != 0]])
@@ -90,7 +101,7 @@ suite.describe('compact SQL index', function()
 
   suite.it('exposes packed symbol usage without aggregating reference rows', function()
     local compact = require '@openmw/workbench/compact'
-    local index = compact.build('tests/compact-fixture', { caseInsensitiveModules = false })
+    local index = compact.build(Fixture, { caseInsensitiveModules = false })
     local result = index:query([[SELECT s.target, u.references, u.members, u.calls
       FROM symbol_usage u
       JOIN symbols s ON u.symbol_id = s.id
