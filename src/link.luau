@@ -1,8 +1,8 @@
 --!strict
 --!native
 -- Source <-> content linker. This module is intentionally conservative: it only emits
--- source/data edges when a literal OpenMW API argument or Dreamwind-decoded record field
--- gives us a concrete identity. Unresolved references remain facts, not missing-content errors,
+-- source/data edges when a literal OpenMW API argument or a record field decoded by the tes3
+-- package gives us a concrete identity. Unresolved references remain facts, not missing-content errors,
 -- because the active game load order may contain content outside the inspected roots.
 local style = require '@jess/style'
 local analysis = style.analysis

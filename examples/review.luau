@@ -1,5 +1,7 @@
 --!strict
--- Run with the workbench package activated after builtin.jpk and dreamwind.jpk are available.
+-- Run with the workbench and every package it depends on given to `jess run --package`: jessql, tes3,
+-- nif, tes3-saves, vfs, and the dream-archive package vfs depends on. The built-in package is part
+-- of Jess. Arguments are the folders to review; without any, the working directory.
 local workbench = require '@openmw/workbench'
 local roots = {}
 for index = 1, #arg do table.insert(roots, arg[index]) end

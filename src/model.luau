@@ -405,7 +405,7 @@ end
 
 local function parseContentConfig(path: string)
   local declarations = {}
-  -- Dreamwind rejects malformed/non-plugin content paths; keep scanning source roots when one cannot be decoded.
+  -- The tes3 package rejects malformed/non-plugin content paths; keep scanning source roots when one cannot be decoded.
   local ok, scripts = pcall(content.scriptConfig, path)
   if not ok or type(scripts) ~= 'table' then return declarations end
 

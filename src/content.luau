@@ -1,7 +1,8 @@
 --!strict
 --!native
--- Dreamwind-backed data-world adapters. The source analyzer remains independent of these modules;
--- the full workbench layer activates them so source, content, VFS and NIF facts can be correlated.
+-- Data-world adapters over the standalone tes3, vfs, nif and tes3-saves packages. The source
+-- analyzer remains independent of these modules; the full workbench layer activates them so
+-- source, content, VFS and NIF facts can be correlated.
 local tes3 = require '@tes3'
 local vfs = require '@vfs'
 local nif = require '@nif'
@@ -22,9 +23,9 @@ local function openNif(path: string)
 end
 
 -- OpenMW stores embedded Lua configuration in a single LUAL record inside
--- .omwaddon/.omwgame content files. Dreamwind already knows the TES3 record
--- layout, so expose the decoded ScriptConfigList instead of duplicating that
--- binary format in the workbench.
+-- .omwaddon/.omwgame content files. The tes3 package already knows the TES3
+-- record layout, so expose the decoded ScriptConfigList instead of duplicating
+-- that binary format in the workbench.
 local function scriptConfig(path: string)
   local plugin = openPlugin(path)
   local index = tes3.records.find(plugin, 'LUAL')
