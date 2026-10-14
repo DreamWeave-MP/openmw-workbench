@@ -1,0 +1,191 @@
+--!strict
+-- The workbench, timed through its public API over a generated load order of OpenMW Lua mods:
+-- twenty mods of thirty scripts, each script requiring its neighbours and the engine's packages,
+-- registering handlers and calling the API, each mod with its `.omwscripts`. Run by
+--   jess run --package . --package-path .. --capability filesystem.read
+--     --capability filesystem.write bench/bench.luau <scratch folder> [filter]
+-- on a release build. Prints one line per workload: its name, a tab, and the seconds one call
+-- takes; then one `check` line per workload with a digest of its answer, which must read the same
+-- for two versions of the package being compared.
+local bytes = require '@dream/bytes'
+local fs = require '@dream/fs'
+local workbench = require '@openmw/workbench'
+
+if not jess.bench.verified then
+  error('workbench bench: this jess was built without the verified toolchain: measure on a release build', 0)
+end
+
+local scratch: string, filter: string? = ...
+assert(scratch, 'give a scratch folder to write the corpus into')
+
+local only = if filter and filter ~= '' then filter else nil
+local Mods, Scripts = 20, 30
+
+local Engine = { 'openmw.core', 'openmw.self', 'openmw.types', 'openmw.ui', 'openmw.storage', 'openmw.util' }
+local Kinds = { 'PLAYER', 'GLOBAL', 'LOCAL', 'MENU' }
+
+--- One script: requires of the engine and of the mod's other scripts, locals that call through
+--- them, and a handler table.
+local function script(mod: number, number: number): string
+  local lines = { '-- Generated for the workbench bench.' }
+  local engine = Engine[(mod + number) % #Engine + 1]
+  local other = Engine[(mod * 3 + number) % #Engine + 1]
+
+  table.insert(lines, "local core = require('openmw.core')")
+  table.insert(lines, `local first = require('{engine}')`)
+  table.insert(lines, `local second = require('{other}')`)
+
+  if number > 1 then table.insert(lines, `local previous = require('scripts.mod{mod}.script{number - 1}')`) end
+
+  table.insert(lines, `local section = require('openmw.storage').playerSection('Mod{mod}Settings')`)
+  table.insert(lines, 'local state = { count = 0, seen = {} }')
+  table.insert(lines, '')
+
+  for helper = 1, 6 do
+    table.insert(lines, `local function helper{helper}(value, other)`)
+    table.insert(lines, `  state.count = state.count + {helper}`)
+    table.insert(lines, `  local result = first.call{helper}(value, second.value{helper % 3})`)
+    table.insert(lines, `  if result and result.valid then core.sendGlobalEvent('Mod{mod}Event{helper}', \{ value = value \}) end`)
+    table.insert(lines, `  state.seen[value] = section:get('key{helper}') or other`)
+    table.insert(lines, '  return result')
+    table.insert(lines, 'end')
+    table.insert(lines, '')
+  end
+
+  table.insert(lines, 'return {')
+  table.insert(lines, '  engineHandlers = {')
+  table.insert(lines, '    onUpdate = function(dt) helper1(dt, state.count) end,')
+  table.insert(lines, '    onSave = function() return { count = state.count } end,')
+  table.insert(lines, '    onLoad = function(saved) state.count = saved and saved.count or 0 end,')
+  table.insert(lines, '  },')
+  table.insert(lines, '  eventHandlers = {')
+  table.insert(lines, `    Mod{mod}Ping = function(data) return helper2(data, helper3(data)) end,`)
+  table.insert(lines, '  },')
+
+  if number > 1 then table.insert(lines, '  previous = previous,') end
+
+  table.insert(lines, '}')
+
+  return table.concat(lines, '\n') .. '\n'
+end
+
+local roots: { string } = {}
+
+for mod = 1, Mods do
+  local root = jess.fs.join(scratch, `mod{mod}`)
+  local folder = jess.fs.join(root, 'scripts', `mod{mod}`)
+  fs.mkdir(folder, { recursive = true })
+
+  local manifest = {}
+
+  for number = 1, Scripts do
+    jess.fs.write(jess.fs.join(folder, `script{number}.lua`), script(mod, number))
+    table.insert(manifest, `{Kinds[number % #Kinds + 1]}: scripts/mod{mod}/script{number}.lua`)
+  end
+
+  jess.fs.write(jess.fs.join(root, `mod{mod}.omwscripts`), table.concat(manifest, '\n') .. '\n')
+  table.insert(roots, root)
+end
+
+local function median(samples: { number }): number
+  table.sort(samples)
+  return samples[(#samples + 1) // 2]
+end
+
+local collect = jess.bench.collect
+local checks: { string } = {}
+
+--- Seconds per call of `body`: warmed up, then the median of seven batches of a size that takes
+--- about a tenth of a second.
+local function measure(body: () -> unknown): (number, unknown)
+  collect()
+  local answer = body()
+  local start = os.clock()
+  body()
+  local once = math.max(os.clock() - start, 1e-7)
+  local iterations = math.max(1, math.floor(0.1 / once))
+  local samples = {}
+
+  for batch = 1, 7 do
+    collect()
+    start = os.clock()
+
+    for _ = 1, iterations do
+      body()
+    end
+
+    samples[batch] = (os.clock() - start) / iterations
+  end
+
+  return median(samples), answer
+end
+
+--- Times `body` and records a digest of what `describe` makes of its answer.
+local function workload(name: string, body: () -> unknown, describe: (answer: any) -> string)
+  if only and not string.find(name, only, 1, true) then return end
+
+  local seconds, answer = measure(body)
+  print(`{name}\t{string.format('%.9f', seconds)}`)
+  table.insert(checks, `check\t{name}\t{string.sub(bytes.blake3(describe(answer)), 1, 16)}`)
+end
+
+local function rows(result: any): string
+  local parts = {}
+
+  for _, row in result.rows do
+    local fields = {}
+
+    for key, value in row do
+      table.insert(fields, `{key}={value}`)
+    end
+
+    table.sort(fields)
+    table.insert(parts, table.concat(fields, ','))
+  end
+
+  return table.concat(parts, '\n')
+end
+
+workload('index, 600 scripts in 20 mods', function() return workbench.index(roots) end, function(index)
+  local stats = index.stats
+  return `{stats.sources} {stats.references} {stats.calls} {stats.members}`
+end)
+
+local index = workbench.index(roots)
+
+workload('query: calls into one engine package', function()
+  return index:query [[SELECT source_id, line, target FROM calls WHERE module = 'openmw.ui']]
+end, rows)
+
+workload('query: local requires', function()
+  return index:query [[SELECT module, target_source_id FROM requires WHERE target_source_id != 0]]
+end, rows)
+
+workload('query: the most used symbols', function()
+  return index:query [[SELECT s.target, u.references, u.calls FROM symbol_usage u
+    JOIN symbols s ON u.symbol_id = s.id ORDER BY u.references DESC LIMIT 20]]
+end, rows)
+
+workload('open, 600 scripts in 20 mods', function() return workbench.open(roots) end, function(project)
+  return `{#project.scripts} {#project.manifests}`
+end)
+
+local project = workbench.open(roots)
+
+workload('review, default profile', function() return workbench.review(project, { profile = 'default' }) end, function(report)
+  local lines = {}
+
+  for _, finding in report.findings do
+    table.insert(lines, workbench.formatFinding(finding))
+  end
+
+  return table.concat(lines, '\n')
+end)
+
+workload('graph', function() return workbench.graph(project) end, function(graph)
+  return `{#(graph.nodes or {})} {#(graph.edges or {})}`
+end)
+
+for _, line in checks do
+  print(line)
+end
