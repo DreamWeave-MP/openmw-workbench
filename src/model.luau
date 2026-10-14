@@ -443,12 +443,27 @@ local function parseContentConfig(path: string)
   return declarations
 end
 
-local function sourceByScriptPath(workspace: Workspace, scriptPath: string): Source?
-  local wanted = normalize(scriptPath)
+type Candidate = { path: string, source: Source }
+
+--- The workspace's paths normalized once, in the order `sourceByScriptPath` walks them: when
+--- several end with what a manifest names, the first of them is the one it answers.
+local function scriptCandidates(workspace: Workspace): { Candidate }
+  local candidates: { Candidate } = {}
+
   for path, source in workspace.byPath do
-    local candidate = normalize(path)
-    if candidate == wanted or string.sub(candidate, -#wanted) == wanted then return source end
+    table.insert(candidates, { path = normalize(path), source = source })
   end
+
+  return candidates
+end
+
+local function sourceByScriptPath(candidates: { Candidate }, scriptPath: string): Source?
+  local wanted = normalize(scriptPath)
+
+  for _, candidate in candidates do
+    if candidate.path == wanted or string.sub(candidate.path, -#wanted) == wanted then return candidate.source end
+  end
+
   return nil
 end
 
@@ -799,8 +814,10 @@ local function build(roots: { string })
     annotationsByPath[source.path] = contextAnnotationsSource(source)
   end
 
+  local candidates = scriptCandidates(workspace)
+
   for _, declaration in declarations do
-    local source = sourceByScriptPath(workspace, declaration.path)
+    local source = sourceByScriptPath(candidates, declaration.path)
     if not source or not source.path then continue end
 
     declaredByPath[source.path] = declaredByPath[source.path] or {}
