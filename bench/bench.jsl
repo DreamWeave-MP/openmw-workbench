@@ -3,7 +3,7 @@
 -- twenty mods of thirty scripts, each script requiring its neighbours and the engine's packages,
 -- registering handlers and calling the API, each mod with its `.omwscripts`. Run by
 --   jess run --package . --package-path .. --capability filesystem.read
---     --capability filesystem.write bench/bench.luau <scratch folder> [filter]
+--     --capability filesystem.write bench/bench.jsl <scratch folder> [filter]
 -- on a release build. Prints one line per workload: its name, a tab, and the seconds one call
 -- takes; then one `check` line per workload with a digest of its answer, which must read the same
 -- for two versions of the package being compared.

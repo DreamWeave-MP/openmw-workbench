@@ -5,7 +5,7 @@ id = "org.dreamweave.openmw-workbench"
 version = "0.6.0"
 jess_api = "1"
 include = ["src", "examples", "tests"]
-tests = ["tests/run.luau", "tests/style.luau"]
+tests = ["tests/run.jsl", "tests/style.jsl"]
 
 [dependencies]
 "org.dreamweave.tes3" = "0.1"
@@ -15,15 +15,15 @@ tests = ["tests/run.luau", "tests/style.luau"]
 "org.dreamweave.jessql" = "0.1.4"
 
 [modules]
-"@openmw/workbench" = "src/init.luau"
-"@openmw/workbench/model" = "src/model.luau"
-"@openmw/workbench/review" = "src/review.luau"
-"@openmw/workbench/graph" = "src/graph.luau"
-"@openmw/workbench/content" = "src/content.luau"
-"@openmw/workbench/knowledge" = "src/knowledge.luau"
-"@openmw/workbench/contract" = "src/contract.luau"
-"@openmw/workbench/link" = "src/link.luau"
-"@openmw/workbench/compact" = "src/compact.luau"
+"@openmw/workbench" = "src/init.jsl"
+"@openmw/workbench/model" = "src/model.jsl"
+"@openmw/workbench/review" = "src/review.jsl"
+"@openmw/workbench/graph" = "src/graph.jsl"
+"@openmw/workbench/content" = "src/content.jsl"
+"@openmw/workbench/knowledge" = "src/knowledge.jsl"
+"@openmw/workbench/contract" = "src/contract.jsl"
+"@openmw/workbench/link" = "src/link.jsl"
+"@openmw/workbench/compact" = "src/compact.jsl"
 
 [[layer]]
 id = "openmw.index"

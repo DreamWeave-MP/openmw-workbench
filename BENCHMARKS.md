@@ -5,7 +5,7 @@ build of Jess at `b12612f` on l3i 2.0.2.
 
 ```sh
 jess run --package <package> --package-path jpk --capability filesystem.read \
-  --capability filesystem.write <package>/bench/bench.luau <scratch folder>
+  --capability filesystem.write <package>/bench/bench.jsl <scratch folder>
 ```
 
 The bench writes a load order of twenty generated mods, thirty OpenMW Lua scripts each with

@@ -278,7 +278,7 @@ end
 
 local function openmwLocalModuleTarget(index, moduleName: string): string?
   local candidate = string.lower(string.gsub(moduleName, '%.', '/'))
-  local suffixes = { `{candidate}.lua`, `{candidate}.luau`, `{candidate}/init.lua`, `{candidate}/init.luau` }
+  local suffixes = { `{candidate}.lua`, `{candidate}.jsl`, `{candidate}/init.lua`, `{candidate}/init.jsl` }
   local match: string? = nil
   for _, suffix in suffixes do
     local value = index[suffix]

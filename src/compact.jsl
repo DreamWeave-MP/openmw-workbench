@@ -789,7 +789,7 @@ local function build(paths: { string } | string, options)
       local candidate = string.gsub(moduleName, '%.', '/')
       if caseInsensitive then candidate = string.lower(candidate) end
       local target, ambiguous = nil, false
-      for _, ending in { '.lua', '.luau', '/init.lua', '/init.luau' } do
+      for _, ending in { '.lua', '.jsl', '/init.lua', '/init.jsl' } do
         local value = suffix[candidate .. ending]
         if value == false then ambiguous = true; break end
 
