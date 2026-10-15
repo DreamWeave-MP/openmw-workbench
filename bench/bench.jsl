@@ -72,18 +72,20 @@ end
 local roots: { string } = {}
 
 for mod = 1, Mods do
-  local root = jess.fs.join(scratch, `mod{mod}`)
-  local folder = jess.fs.join(root, 'scripts', `mod{mod}`)
+  local root = fs.join(scratch, `mod{mod}`)
+  local folder = fs.join(root, 'scripts', `mod{mod}`)
   fs.mkdir(folder, { recursive = true })
 
   local manifest = {}
 
   for number = 1, Scripts do
-    jess.fs.write(jess.fs.join(folder, `script{number}.lua`), script(mod, number))
+    local done, problem = fs.writeFile(fs.join(folder, `script{number}.lua`), script(mod, number), { atomic = true, createParents = true })
+    if not done then error(problem, 0) end
     table.insert(manifest, `{Kinds[number % #Kinds + 1]}: scripts/mod{mod}/script{number}.lua`)
   end
 
-  jess.fs.write(jess.fs.join(root, `mod{mod}.omwscripts`), table.concat(manifest, '\n') .. '\n')
+  local done, problem = fs.writeFile(fs.join(root, `mod{mod}.omwscripts`), table.concat(manifest, '\n') .. '\n', { atomic = true, createParents = true })
+  if not done then error(problem, 0) end
   table.insert(roots, root)
 end
 

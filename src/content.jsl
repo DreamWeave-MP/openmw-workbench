@@ -2,6 +2,7 @@
 -- Data-world adapters over the standalone tes3, vfs, nif and tes3-saves packages. The source
 -- analyzer remains independent of these modules; the full workbench layer activates them so
 -- source, content, VFS and NIF facts can be correlated.
+local fs = require '@dream/fs'
 local tes3 = require '@tes3'
 local vfs = require '@vfs'
 local nif = require '@nif'
@@ -10,7 +11,7 @@ local saves = require '@tes3-saves'
 export type StringField = tes3.StringField
 
 local function readBuffer(path: string)
-  local bytes = jess.fs.readBuffer(path)
+  local bytes = fs.readFile(path)
   if not bytes then error(`{path}: no such file`) end
   return bytes
 end

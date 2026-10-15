@@ -2,6 +2,7 @@
 -- Integer-backed, queryable semantic index for large source universes.
 -- ASTs are transient compiler input: this module lowers useful facts into compact buffers and
 -- native intern pools, then exposes them through JessQL providers.
+local fs = require '@dream/fs'
 local style = require '@jess/style'
 local analysis = style.analysis
 local sql = require '@jessql'
@@ -677,7 +678,7 @@ local function build(paths: { string } | string, options)
   local totalBytes, duplicatedCallMembers, callOnly = 0, 0, 0
   local started = os.clock()
   for sourceId, path in files do
-    local text = jess.fs.read(path)
+    local text = fs.readFileString(path)
     if not text then error(`compact index: unreadable source {path}`) end
     totalBytes += #text
     internPath(sourceId, path)

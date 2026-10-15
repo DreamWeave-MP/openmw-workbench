@@ -3,6 +3,7 @@
 -- source/data edges when a literal OpenMW API argument or a record field decoded by the tes3
 -- package gives us a concrete identity. Unresolved references remain facts, not missing-content errors,
 -- because the active game load order may contain content outside the inspected roots.
+local fs = require '@dream/fs'
 local style = require '@jess/style'
 local analysis = style.analysis
 local model = require '@openmw/workbench/model'
@@ -114,15 +115,18 @@ local function collectPlugins(roots: { string }): { string }
   local found = {}
 
   local function visit(path: string)
-    if jess.fs.isDir(path) then
-      for _, name in jess.fs.list(path) do
+    if fs.isDir(path) then
+      local names, problem = fs.list(path)
+      if not names then error(problem, 0) end
+
+      for _, name in names do
         if isSkippedDirectory(name) then continue end
-        visit(jess.fs.join(path, name))
+        visit(fs.join(path, name))
       end
       return
     end
 
-    if not jess.fs.isFile(path) then return end
+    if not fs.isFile(path) then return end
     local lower = string.lower(path)
     if string.find(lower, '%.omwaddon$') or string.find(lower, '%.omwgame$') or string.find(lower, '%.esp$') or string.find(lower, '%.esm$') then
       table.insert(found, path)
