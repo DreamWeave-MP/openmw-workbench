@@ -1,5 +1,4 @@
 --!strict
---!native
 local style = require '@jess/style'
 local model = require '@openmw/workbench/model'
 local review = require '@openmw/workbench/review'

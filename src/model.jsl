@@ -1,5 +1,4 @@
 --!strict
---!native
 local analysis = require '@jess/analysis'
 local knowledge = require '@openmw/workbench/knowledge'
 local content = require '@openmw/workbench/content'
@@ -51,6 +50,7 @@ local ManifestLocalTypeTags: { [string]: boolean } = {
   REPAIR = true,
 }
 
+@native
 local function setFrom(list: { string }): ContextSet
   local result = {}
   for _, value in list do result[value] = true end
@@ -341,6 +341,7 @@ end
 local function collectConfigs(roots: { string }): ({ string }, { string })
   local manifests, contentConfigs = {}, {}
 
+  @native
   local function visit(path: string)
     if jess.fs.isDir(path) then
       for _, name in jess.fs.list(path) do
@@ -365,6 +366,7 @@ local function collectConfigs(roots: { string }): ({ string }, { string })
   return manifests, contentConfigs
 end
 
+@native
 local function parseManifest(path: string, text: string)
   local declarations = {}
   local lineNumber = 0
@@ -457,6 +459,7 @@ local function scriptCandidates(workspace: Workspace): { Candidate }
   return candidates
 end
 
+@native
 local function sourceByScriptPath(candidates: { Candidate }, scriptPath: string): Source?
   local wanted = normalize(scriptPath)
 

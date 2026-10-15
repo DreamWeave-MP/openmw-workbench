@@ -1,5 +1,4 @@
 --!strict
---!native
 -- Integer-backed, queryable semantic index for large source universes.
 -- ASTs are transient compiler input: this module lowers useful facts into compact buffers and
 -- native intern pools, then exposes them through JessQL providers.
@@ -32,6 +31,7 @@ local function writeValue(target: buffer, offset: number, kind: string, value: n
   else buffer.writeu32(target, offset, value) end
 end
 
+@native
 local function readValue(source: buffer, offset: number, kind: string): number
   if kind == 'u8' then return buffer.readu8(source, offset) end
   if kind == 'u16' then return buffer.readu16(source, offset) end
@@ -127,6 +127,7 @@ local function refStore()
     return nil
   end
 
+  @native
   function store:add(values)
     local line, column, symbol, meta = values[1] or 0, values[2] or 0, values[3] or 0, values[4] or 0
     local row = self.rows + 1
@@ -161,6 +162,7 @@ local function refStore()
     return readU24(chunk, base), readU24(chunk, base + 3)
   end
 
+  @native
   function store:get(row1: number, column: number): number
     local firstPacked, secondPacked = pair(self, row1)
     if column == 1 then
@@ -199,6 +201,7 @@ local function depthCodec()
   local byKey = {}
 
   local codec = { triples = triples }
+  @native
   function codec:encode(functionDepth: number, loopDepth: number, conditionalDepth: number): (number, boolean)
     if functionDepth > 65535 or loopDepth > 65535 or conditionalDepth > 65535 then return 63, true end
     local key = `{functionDepth}:{loopDepth}:{conditionalDepth}`
@@ -214,6 +217,7 @@ local function depthCodec()
     return 63, true
   end
 
+  @native
   function codec:decode(code: number): (number, number, number)
     local row = code + 1
     return triples:get(row, 1), triples:get(row, 2), triples:get(row, 3)
@@ -291,6 +295,7 @@ local function symbolStore()
     return row
   end
 
+  @native
   function store:get(row1: number, column: number): number
     local value = raw(self, row1)
     if column == 1 then return value % 524288 end
@@ -478,6 +483,7 @@ local function build(paths: { string } | string, options)
     return (parent * 104729 + atom * 130363) % capacity
   end
 
+  @native
   local function edgeLookup(parent: number, atom: number): number?
     local slot = edgeStart(parent, atom, edgeCapacity)
     local step = 1
@@ -510,6 +516,7 @@ local function build(paths: { string } | string, options)
     if oldCapacity >= edgeCapacity then error('compact symbol edge hash failed to grow') end
   end
 
+  @native
   local function edge(parent: number, atom: number): number
     local existing = edgeLookup(parent, atom)
     if existing then return existing end
@@ -521,6 +528,7 @@ local function build(paths: { string } | string, options)
     return id
   end
 
+  @native
   local function symbolPath(text: string?): number
     if not text or text == '' then return 0 end
     local parent, first = 0, 1
@@ -550,6 +558,7 @@ local function build(paths: { string } | string, options)
     return parent
   end
 
+  @native
   local function symbolText(id: number): string?
     if id == 0 then return nil end
     local parts = {}
@@ -977,6 +986,7 @@ local function build(paths: { string } | string, options)
     symbolPostingBytes = buffer.len(starts) + buffer.len(postings)
   end
 
+  @native
   local function referenceMatches(rowId: number, wantCall: boolean): boolean
     local kind = refKind(refs:get(rowId, 4))
     if wantCall then return kind == 2 or kind == 3 end
@@ -1182,6 +1192,7 @@ local function build(paths: { string } | string, options)
         end
       end
 
+      @native
       local function matches(row: number, source: number): boolean
         if not referenceMatches(row, wantCall) then return false end
         local symbol = refs:get(row, 3)
@@ -1206,7 +1217,7 @@ local function build(paths: { string } | string, options)
 
       return {
         _jessqlIter = 'v1', handledConstraints = handled, handledWhere = false, ordered = false,
-        next = function()
+        next = @native function()
           while true do
             if limit and emitted >= limit then return nil end
             local current, currentSource
@@ -1332,7 +1343,7 @@ local function build(paths: { string } | string, options)
 
     return {
       _jessqlIter = 'v1', handledConstraints = handled, handledWhere = false, ordered = false,
-      next = function()
+      next = @native function()
         while rowId <= lastRow do
           if limit and emitted >= limit then return nil end
           local current = rowId
@@ -1431,6 +1442,7 @@ local function build(paths: { string } | string, options)
 
   local usageColumns = { 'symbol_id', 'references', 'members', 'calls' }
   local usageProvider = { columns = usageColumns }
+  @native
   local function usageRow(symbolId: number, request)
     local row = {}
     for _, name in request.columns do
@@ -1524,7 +1536,7 @@ local function build(paths: { string } | string, options)
       handledConstraints = true,
       handledWhere = false,
       ordered = orderedIds ~= nil,
-      next = function()
+      next = @native function()
         if orderedIds then
           position += 1
           local id = orderedIds[position]
@@ -1555,6 +1567,7 @@ local function build(paths: { string } | string, options)
   end
 
   local symbolProvider = { columns = { 'id', 'target', 'module', 'member' }, indexes = { id = true, target = true } }
+  @native
   local function symbolRow(id: number, request)
     local result = {}
     local moduleId = symbolNodes:get(id, 3)

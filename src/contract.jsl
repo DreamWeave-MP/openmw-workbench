@@ -1,5 +1,4 @@
 --!strict
---!native
 -- GENERATED from the supplied OpenMW source tree. Do not hand-edit contract facts.
 -- Source of truth: files/lua_api/openmw, MWLua package construction/handler call sites,
 -- storage package construction, and OpenMW's own builtin Lua script registrations.

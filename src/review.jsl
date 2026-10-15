@@ -1,5 +1,4 @@
 --!strict
---!native
 local analysis = require('@jess/style').analysis
 local knowledge = require '@openmw/workbench/knowledge'
 local model = require '@openmw/workbench/model'
@@ -178,6 +177,7 @@ local function firstMember(member: string): string
   return string.match(member, '^([^.]+)') or member
 end
 
+@native
 local function canProveUnknownMember(module, memberName: string): boolean
   local parent = string.match(memberName, '^(.*)%.[^.]+$')
   if not parent then return true end
@@ -185,6 +185,7 @@ local function canProveUnknownMember(module, memberName: string): boolean
   return parentSpec ~= nil and parentSpec.expands == true
 end
 
+@native
 local function contextualMember(module, memberName: string)
   local current: string? = memberName
   while current do
@@ -195,6 +196,7 @@ local function contextualMember(module, memberName: string)
   return nil, nil
 end
 
+@native
 local function checkApi(project, enabled, out)
   if not hasCategory(enabled, 'api') then return end
 
@@ -756,6 +758,7 @@ local function checkContent(project, enabled, out, linked)
   end
 end
 
+@native
 local function compare(left: Finding, right: Finding): boolean
   if left.path ~= right.path then return left.path < right.path end
   if left.line ~= right.line then return left.line < right.line end
