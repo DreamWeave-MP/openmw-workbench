@@ -39,3 +39,52 @@ were already written for the data they hold. Interning a symbol's dotted segment
 the symbol, instead of substrings, measured no change and was not kept. No loop here converts to
 the dialect exactly: the one-line accumulations append to lists that already hold rows, or walk a
 set's keys.
+
+## Which modules are native, and why
+
+Jess compiles to machine code only what is marked (`--!native` on a module, `@native` on one
+function), and every load pays for what is marked. A module carries `--!native` when a row below
+spends its time there and the module is small (12 KB or less); a larger module carries `@native`
+on the functions the row spends its time in, and nothing else.
+
+Measured 2026-10-15 with `jess 0.1.0`, the verified release build of jess `07c38cb` on l3i
+2.0.3, on the i7-10870H, the one-minute load 1.28 and 1.23 at the start of the two
+sessions. In each session the bench ran alternately on this package and on a copy of it with
+every module marked, three fresh runs of `bench/bench.jsl` each, every run's row the median of
+its batches; a column is the median of the three, and a ratio is against the all-marked runs of
+the same session. Which functions a row spends its time in comes from `jess run --profile` of
+that row alone, unmarked. The load cost is a fresh `jess run --package <this package>
+--package-path jpk` of a script that only requires `@openmw/workbench`, the two sides alternating, the
+median of five each after one warm-up.
+
+| Requiring `@openmw/workbench` | All marked | This state |
+| --- | ---: | ---: |
+| Unmarked | 0.312 s | 0.271 s |
+| Final | 0.313 s | 0.276 s |
+
+| Row | All marked (ms) | Unmarked / all marked | Final (ms) | Final / all marked |
+| --- | ---: | ---: | ---: | ---: |
+| index, 600 scripts in 20 mods | 309.9 | **1.196×** | 323.3 | 1.043× |
+| query: calls into one engine package | 7.159 | **3.098×** | 7.564 | **1.057×** |
+| query: local requires | 1.103 | **2.288×** | 1.944 | **1.761×** |
+| query: the most used symbols | 0.1926 | **1.522×** | 0.2051 | **1.065×** |
+| open, 600 scripts in 20 mods | 319.0 | **1.078×** | 329.5 | 1.033× |
+| review, default profile | 45.80 | **1.313×** | 51.61 | **1.127×** |
+| graph | 10.87 | **1.374×** | 10.84 | 0.997× |
+
+What carries the directive (every module and function here is one a row spends its time in,
+unmarked):
+
+- Whole: `graph`, `knowledge`.
+- `compact`, by function: `readValue`, `store.add`, `store.get`, `codec.encode`, `codec.decode`,
+  `store.get`, `edgeLookup`, `edge`, `symbolPath`, `symbolText`, `referenceMatches`, `matches`,
+  `next`, `next`, `usageRow`, `next`, `symbolRow`.
+- `model`, by function: `setFrom`, `visit`, `parseManifest`, `sourceByScriptPath`.
+- `review`, by function: `canProveUnknownMember`, `contextualMember`, `checkApi`, `compare`.
+- Unmarked: `content`, `contract`, `init`, `link`.
+
+Most of what this saves is `contract`, 982 KB of the engine's API contract that every load used
+to compile to machine code and no row spends time in: requiring `@openmw/workbench` costs 0.037 s
+less than all marked. The rows still above 5% are the default review (1.13x, about 6 ms of 46),
+querying local requires (1.76x, 0.8 ms of 1.1), and two calls at 1.06x inside this protocol's
+noise; together they cost less than one load saves.
