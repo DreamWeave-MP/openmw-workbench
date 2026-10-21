@@ -1,12 +1,12 @@
 --!strict
 local style = require '@jess/style'
-local model = require '@openmw/workbench/model'
-local review = require '@openmw/workbench/review'
-local graph = require '@openmw/workbench/graph'
-local content = require '@openmw/workbench/content'
-local knowledge = require '@openmw/workbench/knowledge'
-local link = require '@openmw/workbench/link'
-local compact = require '@openmw/workbench/compact'
+local model = require '@openmw-install/workbench/model'
+local review = require '@openmw-install/workbench/review'
+local graph = require '@openmw-install/workbench/graph'
+local content = require '@openmw-install/workbench/content'
+local knowledge = require '@openmw-install/workbench/knowledge'
+local link = require '@openmw-install/workbench/link'
+local compact = require '@openmw-install/workbench/compact'
 
 
 local function index(paths: { string } | string, options)

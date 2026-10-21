@@ -1,8 +1,8 @@
 --!strict
 --!native
 -- Executable OpenMW knowledge. Stable review policy lives here; factual engine contracts are generated
--- from the supplied OpenMW source tree in @openmw/workbench/contract.
-local contract = require '@openmw/workbench/contract'
+-- from the supplied OpenMW source tree in @openmw-install/workbench/contract.
+local contract = require '@openmw-install/workbench/contract'
 
 local RuntimeContexts = { 'global', 'local', 'player', 'menu' }
 local AllContexts = { 'global', 'local', 'player', 'menu', 'load' }

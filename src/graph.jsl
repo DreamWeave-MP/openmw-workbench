@@ -1,6 +1,6 @@
 --!strict
 --!native
-local model = require '@openmw/workbench/model'
+local model = require '@openmw-install/workbench/model'
 
 local function addNode(nodes, seen, id: string, kind: string, label: string, metadata)
   if seen[id] then return end

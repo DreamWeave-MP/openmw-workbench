@@ -9,7 +9,7 @@
 -- for two versions of the package being compared.
 local bytes = require '@dream/bytes'
 local fs = require '@dream/fs'
-local workbench = require '@openmw/workbench'
+local workbench = require '@openmw-install/workbench'
 
 if not jess.bench.verified then
   error('workbench bench: this jess was built without the verified toolchain: measure on a release build', 0)

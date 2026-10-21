@@ -6,9 +6,9 @@
 local fs = require '@dream/fs'
 local style = require '@jess/style'
 local analysis = style.analysis
-local model = require '@openmw/workbench/model'
-local content = require '@openmw/workbench/content'
-local knowledge = require '@openmw/workbench/knowledge'
+local model = require '@openmw-install/workbench/model'
+local content = require '@openmw-install/workbench/content'
+local knowledge = require '@openmw-install/workbench/knowledge'
 
 type NifTexture = {
   record: number,

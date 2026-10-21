@@ -8,38 +8,38 @@ include = ["src", "examples", "tests"]
 tests = ["tests/run.jsl", "tests/style.jsl"]
 
 [dependencies]
-"org.dreamweave.tes3" = "0.1"
+"org.dreamweave.esm" = "0.1"
 "org.dreamweave.vfs" = "0.1"
 "org.dreamweave.nif" = "0.1"
 "org.dreamweave.tes3-saves" = "0.1"
 "org.dreamweave.jessql" = "0.1.4"
 
 [modules]
-"@openmw/workbench" = "src/init.jsl"
-"@openmw/workbench/model" = "src/model.jsl"
-"@openmw/workbench/review" = "src/review.jsl"
-"@openmw/workbench/graph" = "src/graph.jsl"
-"@openmw/workbench/content" = "src/content.jsl"
-"@openmw/workbench/knowledge" = "src/knowledge.jsl"
-"@openmw/workbench/contract" = "src/contract.jsl"
-"@openmw/workbench/link" = "src/link.jsl"
-"@openmw/workbench/compact" = "src/compact.jsl"
+"@openmw-install/workbench" = "src/init.jsl"
+"@openmw-install/workbench/model" = "src/model.jsl"
+"@openmw-install/workbench/review" = "src/review.jsl"
+"@openmw-install/workbench/graph" = "src/graph.jsl"
+"@openmw-install/workbench/content" = "src/content.jsl"
+"@openmw-install/workbench/knowledge" = "src/knowledge.jsl"
+"@openmw-install/workbench/contract" = "src/contract.jsl"
+"@openmw-install/workbench/link" = "src/link.jsl"
+"@openmw-install/workbench/compact" = "src/compact.jsl"
 
 [[layer]]
 id = "openmw.index"
 requires = ["jessql.core"]
-exports = ["@openmw/workbench/compact"]
+exports = ["@openmw-install/workbench/compact"]
 
 [[layer]]
 id = "openmw.workbench"
-requires = ["openmw.index", "tes3.core", "vfs.core", "nif.core", "tes3-saves.core"]
+requires = ["openmw.index", "esm.core", "vfs.core", "nif.core", "tes3-saves.core"]
 exports = [
-  "@openmw/workbench",
-  "@openmw/workbench/model",
-  "@openmw/workbench/review",
-  "@openmw/workbench/graph",
-  "@openmw/workbench/content",
-  "@openmw/workbench/knowledge",
-  "@openmw/workbench/contract",
-  "@openmw/workbench/link",
+  "@openmw-install/workbench",
+  "@openmw-install/workbench/model",
+  "@openmw-install/workbench/review",
+  "@openmw-install/workbench/graph",
+  "@openmw-install/workbench/content",
+  "@openmw-install/workbench/knowledge",
+  "@openmw-install/workbench/contract",
+  "@openmw-install/workbench/link",
 ]

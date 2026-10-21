@@ -1,8 +1,8 @@
 --!strict
 local analysis = require '@jess/analysis'
 local fs = require '@dream/fs'
-local knowledge = require '@openmw/workbench/knowledge'
-local content = require '@openmw/workbench/content'
+local knowledge = require '@openmw-install/workbench/knowledge'
+local content = require '@openmw-install/workbench/content'
 
 type Source = analysis.Source
 type Workspace = analysis.Workspace

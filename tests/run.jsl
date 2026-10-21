@@ -1,6 +1,6 @@
 --!strict
 --!native
-local workbench = require '@openmw/workbench'
+local workbench = require '@openmw-install/workbench'
 local test = require '@jess/test'
 local expect = test.expect
 local suite = test.new()
@@ -72,7 +72,7 @@ end)
 
 suite.describe('compact SQL index', function()
   suite.it('lowers AST facts into an integer-backed query store', function()
-    local compact = require '@openmw/workbench/compact'
+    local compact = require '@openmw-install/workbench/compact'
     local index = compact.build(Fixture, { caseInsensitiveModules = false })
     expect(index.stats.sources).toBe(2)
     expect(index.stats.nativeBytes > 0).toBeTruthy()
@@ -88,7 +88,7 @@ suite.describe('compact SQL index', function()
   end)
 
   suite.it('keeps local require targets queryable without retaining ASTs', function()
-    local compact = require '@openmw/workbench/compact'
+    local compact = require '@openmw-install/workbench/compact'
     local index = compact.build(Fixture, { caseInsensitiveModules = false })
     local rows = index:query([[SELECT module, target_source_id
       FROM requires
@@ -100,7 +100,7 @@ suite.describe('compact SQL index', function()
 
 
   suite.it('exposes packed symbol usage without aggregating reference rows', function()
-    local compact = require '@openmw/workbench/compact'
+    local compact = require '@openmw-install/workbench/compact'
     local index = compact.build(Fixture, { caseInsensitiveModules = false })
     local result = index:query([[SELECT s.target, u.references, u.members, u.calls
       FROM symbol_usage u
@@ -117,7 +117,7 @@ suite.describe('compact SQL index', function()
   end)
 
   suite.it('limits an ordered query to the rows that sort first, not the rows stored first', function()
-    local compact = require '@openmw/workbench/compact'
+    local compact = require '@openmw-install/workbench/compact'
     local index = compact.build(Fixture, { caseInsensitiveModules = false })
     local orderings = {
       sources = 'id',

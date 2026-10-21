@@ -3,7 +3,7 @@
 -- analyzer remains independent of these modules; the full workbench layer activates them so
 -- source, content, VFS and NIF facts can be correlated.
 local fs = require '@dream/fs'
-local tes3 = require '@tes3'
+local tes3 = require '@esm'
 local vfs = require '@vfs'
 local nif = require '@nif'
 local saves = require '@tes3-saves'

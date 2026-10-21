@@ -54,10 +54,10 @@ every module marked, three fresh runs of `bench/bench.jsl` each, every run's row
 its batches; a column is the median of the three, and a ratio is against the all-marked runs of
 the same session. Which functions a row spends its time in comes from `jess run --profile` of
 that row alone, unmarked. The load cost is a fresh `jess run --package <this package>
---package-path jpk` of a script that only requires `@openmw/workbench`, the two sides alternating, the
+--package-path jpk` of a script that only requires `@openmw-install/workbench`, the two sides alternating, the
 median of five each after one warm-up.
 
-| Requiring `@openmw/workbench` | All marked | This state |
+| Requiring `@openmw-install/workbench` | All marked | This state |
 | --- | ---: | ---: |
 | Unmarked | 0.312 s | 0.271 s |
 | Final | 0.313 s | 0.276 s |
@@ -84,7 +84,7 @@ unmarked):
 - Unmarked: `content`, `contract`, `init`, `link`.
 
 Most of what this saves is `contract`, 982 KB of the engine's API contract that every load used
-to compile to machine code and no row spends time in: requiring `@openmw/workbench` costs 0.037 s
+to compile to machine code and no row spends time in: requiring `@openmw-install/workbench` costs 0.037 s
 less than all marked. The rows still above 5% are the default review (1.13x, about 6 ms of 46),
 querying local requires (1.76x, 0.8 ms of 1.1), and two calls at 1.06x inside this protocol's
 noise; together they cost less than one load saves.

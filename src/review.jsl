@@ -1,7 +1,7 @@
 --!strict
 local analysis = require('@jess/style').analysis
-local knowledge = require '@openmw/workbench/knowledge'
-local model = require '@openmw/workbench/model'
+local knowledge = require '@openmw-install/workbench/knowledge'
+local model = require '@openmw-install/workbench/model'
 
 type Severity = 'error' | 'warning' | 'note'
 type Confidence = 'proven' | 'inferred' | 'heuristic'
@@ -64,7 +64,7 @@ end
 local function enabledCategories(profile: string?)
   local named = profile or 'default'
   local selected = knowledge.profiles[named]
-  if not selected then error(`@openmw/workbench: unknown review profile '{named}'`) end
+  if not selected then error(`@openmw-install/workbench: unknown review profile '{named}'`) end
   local enabled = {}
   for _, category in selected do enabled[category] = true end
   return enabled
