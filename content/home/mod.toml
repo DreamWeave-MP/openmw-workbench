@@ -19,3 +19,12 @@ jess = "org.dreamweave.openmw-workbench"
 version = "0.6.0"
 date = 2026-10-21
 summary = "First release published as a DreamWeave project."
+
+[[releases]]
+version = "0.7.0"
+date = 2026-10-23
+summary = "The workbench has a command: `openmw-workbench [folder...]` reviews an OpenMW Lua mod's scripts."
+added = [
+    "The `openmw-workbench` command: a review of the Lua mod in each folder, the working directory when none is named, as text or JSON, with `--profile` and `--content`. It exits 1 when the review found an error, so CI can stop on one.",
+    "`@openmw-install/workbench/commands`: the same review as a typed request and a typed result.",
+]
