@@ -1,0 +1,152 @@
+--!strict
+--[[
+@openmw-install/workbench/cli: the workbench's command line, over its commands.
+
+  run(argv) -> exit status
+  parse(argv) -> (command, nil) | (nil, message)
+
+  openmw-workbench [--profile <name>] [--content] [--format text|json] [<folder>...]
+  openmw-workbench --help
+
+Reviews the OpenMW Lua mod in each folder, the working directory when none is named. A flag's
+value follows it, or is attached with `=`.
+
+Exit statuses: 0 when the review found no error, 1 when it found one, 8 when the command line
+can't be used, 9 when the review couldn't run (a folder that can't be read, a profile that isn't
+one). Messages go to standard error as `openmw-workbench: <message>`.
+]]
+
+local commands = require '@openmw-install/workbench/commands'
+local json = require '@jess/json'
+local process = require '@dream/process'
+
+export type Command = {
+  action: 'review' | 'help',
+  roots: { string },
+  profile: string?,
+  content: boolean,
+  format: 'text' | 'json',
+}
+
+local Exit = table.freeze { ok = 0, found = 1, invalidInput = 8, runtime = 9 }
+
+local Usage = [[
+openmw-workbench: a review of an OpenMW Lua mod's scripts, against what OpenMW's Lua API allows
+
+  openmw-workbench [--profile <name>] [--content] [--format text|json] [<folder>...]
+  openmw-workbench --help
+
+Reads each folder's scripts and their configuration, and reports what OpenMW would refuse or do
+differently than the script expects, worst first, each with where it is and how sure the review
+is. The working directory when no folder is named.
+
+  --profile <name>  what to check: default, all, api, content, context, events, lifecycle,
+                    performance, persistence, ui
+  --content         link the scripts to the content files beside them, for content findings
+  --format <format> text (the default) or json
+
+Exit status: 0 no error found; 1 an error found; 8 the command line can't be used; 9 the review
+couldn't run.]]
+
+local function out(text: string) process.write('stdout', `{text}\n`) end
+
+local function err(text: string) process.write('stderr', `{text}\n`) end
+
+local function usage(message: string): number
+  err(`openmw-workbench: {message}`)
+  return Exit.invalidInput
+end
+
+--- What an argument list asks for, or why it can't be read.
+local function parse(argv: { string }): (Command?, string?)
+  local command: Command = { action = 'review', roots = {}, content = false, format = 'text' }
+  local seen: { [string]: boolean } = {}
+  local index = 1
+
+  while index <= #argv do
+    local argument = argv[index]
+    index += 1
+
+    if argument == '--help' or argument == '-h' then
+      command.action = 'help'
+      return command, nil
+    end
+
+    if string.sub(argument, 1, 1) ~= '-' then
+      table.insert(command.roots, argument)
+      continue
+    end
+
+    local flag, attached = string.match(argument, '^(%-%-[^=]+)=(.*)$')
+    local name = flag or argument
+    if seen[name] then return nil, `{name} is given twice` end
+
+    seen[name] = true
+
+    if name == '--content' then
+      if attached then return nil, `--content takes no value, not '{attached}'` end
+
+      command.content = true
+      continue
+    end
+
+    if name ~= '--profile' and name ~= '--format' then return nil, `unknown option '{argument}'` end
+
+    local given = attached
+    if not given then
+      given = argv[index]
+      index += 1
+    end
+
+    if not given or given == '' then return nil, `{name} requires a value` end
+
+    if name == '--profile' then
+      command.profile = given
+      continue
+    end
+
+    if given ~= 'text' and given ~= 'json' then return nil, `--format takes text or json, not '{given}'` end
+
+    command.format = given :: 'text' | 'json'
+  end
+
+  if #command.roots == 0 then table.insert(command.roots, '.') end
+
+  return command, nil
+end
+
+local function run(argv: { string }): number
+  local command, message = parse(argv)
+  if not command then return usage(message :: string) end
+
+  if command.action == 'help' then
+    out(Usage)
+    return Exit.ok
+  end
+
+  local report, failure = commands.review {
+    roots = command.roots,
+    profile = command.profile,
+    content = command.content,
+  }
+
+  if not report then
+    err(`openmw-workbench: {failure}`)
+    return Exit.runtime
+  end
+
+  if command.format == 'json' then
+    out(json.encodeTable(report))
+  else
+    local summary = report.summary
+    out(`OpenMW Workbench [{report.profile}]`)
+    out(
+      `scripts={summary.scripts} manifests={summary.manifests} contentConfigs={summary.contentConfigs} errors={summary.errors} warnings={summary.warnings} notes={summary.notes}`
+    )
+    for _, finding in report.findings do out(commands.format(finding)) end
+  end
+
+  return if report.summary.ok then Exit.ok else Exit.found
+end
+
+return table.freeze { Exit = Exit, parse = parse, run = run }

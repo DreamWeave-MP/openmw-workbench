@@ -1,0 +1,64 @@
+--!strict
+-- The command line read into a command, and the review command over the suite's own fixture.
+local cli = require '@openmw-install/workbench/cli'
+local commands = require '@openmw-install/workbench/commands'
+local test = require '@jess/test'
+
+local suite, expect = test.new(), test.expect
+
+--- Where this file is, from its chunk name: `jess package test` runs the suite from whatever
+--- folder it was called in.
+local function here(): string
+  local source = debug.info(1, 's')
+  local first = string.sub(source, 1, 1)
+  local path = if first == '@' or first == '=' then string.sub(source, 2) else source
+  return string.match(path, '^(.*)/[^/]*$') or '.'
+end
+
+local Fixture = `{here()}/compact-fixture`
+
+suite.describe('the command line', function()
+  suite.it('reads folders, a profile, content, and a format', function()
+    expect((cli.parse { '--profile=api', '--content', 'one', '--format', 'json', 'two' })).toEqual {
+      action = 'review',
+      roots = { 'one', 'two' },
+      profile = 'api',
+      content = true,
+      format = 'json',
+    }
+    expect((cli.parse {})).toEqual { action = 'review', roots = { '.' }, content = false, format = 'text' }
+  end)
+
+  suite.it('refuses what it can\'t read, and says why', function()
+    local refused: { { argv: { string }, message: string } } = {
+      { argv = { '--bogus' }, message = 'unknown option \'--bogus\'' },
+      { argv = { '--profile' }, message = '--profile requires a value' },
+      { argv = { '--content=yes' }, message = '--content takes no value, not \'yes\'' },
+      { argv = { '--format', 'yaml' }, message = '--format takes text or json, not \'yaml\'' },
+      { argv = { '--content', '--content' }, message = '--content is given twice' },
+    }
+
+    for _, case in refused do
+      expect({ argv = case.argv, message = select(2, cli.parse(case.argv)) }).toEqual(case)
+    end
+  end)
+end)
+
+suite.describe('commands.review', function()
+  suite.it('reviews a folder\'s scripts and sums up what it found', function()
+    local report = assert(commands.review { roots = { Fixture } })
+    expect(report.profile).toBe 'default'
+    expect(report.summary.scripts).toBe(2)
+    expect(report.summary.ok).toBe(report.summary.errors == 0)
+  end)
+
+  suite.it('says why a profile or a folder can\'t be reviewed', function()
+    local _, profile = commands.review { roots = { Fixture }, profile = 'everything' }
+    expect(profile).toContain 'unknown review profile \'everything\''
+
+    local _, none = commands.review { roots = {} }
+    expect(none).toBe 'a folder to review is required'
+  end)
+end)
+
+return suite

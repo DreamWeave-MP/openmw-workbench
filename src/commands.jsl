@@ -1,0 +1,68 @@
+--!strict
+-- The workbench's commands: a typed request in, a typed result out. Nothing here prints, reads
+-- argv, or decides an exit status; `cli.jsl` does that.
+local workbench = require '@openmw-install/workbench'
+
+export type ReviewRequest = {
+  --- The folders to review: a mod's root, or several reviewed as one.
+  roots: { string },
+  --- The review profile, `default` unless named (`all`, `api`, `content`, `context`, `events`,
+  --- `lifecycle`, `performance`, `persistence`, `ui`).
+  profile: string?,
+  --- Link the scripts to the content files beside them, so content findings can be made.
+  content: boolean?,
+}
+
+export type Finding = {
+  code: string,
+  category: string,
+  severity: 'error' | 'warning' | 'note',
+  confidence: string,
+  path: string,
+  line: number,
+  column: number,
+  message: string,
+  detail: string?,
+}
+
+export type Summary = {
+  errors: number,
+  warnings: number,
+  notes: number,
+  scripts: number,
+  manifests: number,
+  contentConfigs: number,
+  ok: boolean,
+}
+
+export type ReviewResult = { profile: string, findings: { Finding }, summary: Summary }
+
+-- The library's functions are untyped; these are the shapes the commands call them with.
+type InspectOptions = { profile: string?, content: boolean? }
+
+local Inspect = (workbench.inspect :: unknown) :: (roots: { string }, options: InspectOptions) -> { report: unknown }
+local FormatFinding = (workbench.formatFinding :: unknown) :: (finding: Finding) -> string
+
+local commands = {}
+
+--- Reviews `request.roots`. Nil and why when a folder can't be read or the profile isn't one.
+function commands.review(request: ReviewRequest): (ReviewResult?, string?)
+  if #request.roots == 0 then return nil, 'a folder to review is required' end
+
+  -- Opening a folder raises when it can't be listed or read, and the review raises for a profile
+  -- it doesn't have; each is the request's to fix, so each comes back as why.
+  local reviewed, report = pcall(function(): unknown
+    return Inspect(request.roots, { profile = request.profile, content = request.content }).report
+  end)
+
+  if not reviewed then return nil, (string.gsub(tostring(report), '^[^\n]-:%d+: ', '')) end
+
+  return (report :: unknown) :: ReviewResult, nil
+end
+
+--- A finding as one line, as the workbench writes it.
+function commands.format(finding: Finding): string
+  return FormatFinding(finding)
+end
+
+return table.freeze(commands)

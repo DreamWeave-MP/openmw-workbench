@@ -1,0 +1,6 @@
+--!strict
+-- The openmw-workbench command target: its arguments go to the command line, whose exit status
+-- is the command's.
+local cli = require '@openmw-install/workbench/cli'
+
+return cli.run({ ... })
