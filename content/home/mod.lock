@@ -97,6 +97,53 @@
       "groups": [],
       "extensions": {},
       "critical_extensions": []
+    },
+    {
+      "version": "0.7.1",
+      "locked_from": "3cd3179fbdcdbb2e9a7766abfdf4a45c71f33e69",
+      "artifacts": [
+        {
+          "id": "jpk",
+          "format": "jpk",
+          "filename": "org.dreamweave.openmw-workbench-0.7.1.jpk",
+          "media_type": "application/vnd.jess.jpk",
+          "size": 156608,
+          "digests": {
+            "sha256": "68f7ce20b3b065e4295991a4c140a4bf7357fc28c45637bffd579e0e0ed9bbf9"
+          },
+          "jess": {
+            "package": "org.dreamweave.openmw-workbench",
+            "jess_api": "1",
+            "content_digest": "35b939a3430810c00f45ae03fadfeda0805ec521a976fb662fc4f3666ef6597a",
+            "dependencies": {
+              "org.dreamweave.esm": "0.1",
+              "org.dreamweave.jessql": "0.1.4",
+              "org.dreamweave.nif": "0.1",
+              "org.dreamweave.tes3-saves": "0.1",
+              "org.dreamweave.vfs": "2"
+            }
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "openmw-workbench",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
     }
   ]
 }
