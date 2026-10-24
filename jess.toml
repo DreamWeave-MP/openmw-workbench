@@ -2,7 +2,7 @@ manifest_version = 1
 
 [package]
 id = "org.dreamweave.openmw-workbench"
-version = "0.7.0"
+version = "0.7.1"
 jess_api = "1"
 include = ["src", "examples", "tests"]
 tests = ["tests/run.jsl", "tests/cli.jsl", "tests/style.jsl"]

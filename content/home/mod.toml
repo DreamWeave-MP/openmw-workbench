@@ -28,3 +28,14 @@ added = [
     "The `openmw-workbench` command: a review of the Lua mod in each folder, the working directory when none is named, as text or JSON, with `--profile` and `--content`. It exits 1 when the review found an error, so CI can stop on one.",
     "`@openmw-install/workbench/commands`: the same review as a typed request and a typed result.",
 ]
+
+[[releases]]
+version = "0.7.1"
+date = 2026-10-24
+summary = "`self.ATTACK_TYPE` and nearby's enum tables are public API, and the contract that says so is generated from OpenMW's source."
+fixed = [
+    "`self.ATTACK_TYPE`, `nearby.NAVIGATOR_FLAGS`, `nearby.COLLISION_SHAPE_TYPE` and `nearby.FIND_PATH_STATUS` are members, not engine-internal: the spec declares them as types without a field attaching them, and the C++ installs each on its package by that name. A review no longer warns that using them leans on undocumented API.",
+]
+added = [
+    "`tools/contract.jsl` writes `src/contract.jsl` from an OpenMW source tree: the Lua API spec, the C++ that installs packages and engine handlers, the builtin manifests, and the builtin Lua. The contract had no generator; this one reproduces it, and lists as engine-internal only the members the review's own reading can meet.",
+]
