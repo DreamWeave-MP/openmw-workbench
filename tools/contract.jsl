@@ -1,0 +1,1154 @@
+--!strict
+-- Writes src/contract.jsl, the workbench's facts about OpenMW's Lua API, from an OpenMW source tree:
+--
+--   jess run --trusted tools/contract.jsl -- <openmw source tree> [output, src/contract.jsl]
+--
+-- Everything in the contract is read from the tree, and each part names where: the Lua API
+-- specification (files/lua_api/openmw), the C++ that installs packages and engine handlers
+-- (apps/openmw/mwlua, components/lua), the builtin scripts (files/data*/builtin.omwscripts*), and
+-- the Lua OpenMW ships (files/data/scripts), whose uses of members the specification lacks are
+-- the engine-internal ones. The provenance section is every file's SHA-256, so a contract says
+-- which tree it describes.
+local bytes = require '@dream/bytes'
+local fs = require '@dream/fs'
+
+export type Field = { kind: 'field', type: string?, parent: string, name: string, file: string }
+export type Function = {
+  kind: 'function',
+  parent: string,
+  name: string,
+  file: string,
+  params: { string },
+  optional: { boolean },
+  method: boolean,
+  vararg: boolean,
+}
+export type Member = Field | Function
+
+--- A spec file's types: each type's members in declaration order, what it extends, and which
+--- types are declared there at all.
+export type Spec = {
+  path: string,
+  module: string?,
+  contexts: { string },
+  types: { [string]: { Member } },
+  extends: { [string]: { string } },
+  declared: { string },
+}
+
+-- The contexts a script runs in, in the order the contract lists them.
+local Contexts = { 'global', 'local', 'player', 'menu', 'load' }
+
+--[[ The Lua API specification ]]
+
+--- The text of `path` under `root`, raising when it can't be read.
+local function read(root: string, path: string): string
+  local data, problem = fs.readFile(fs.join(root, path))
+  if not data then error(`contract: {path}: {problem}`, 0) end
+
+  return buffer.tostring(data)
+end
+
+--- A type at the start of `text` and what follows it: a reference such as `#number` or
+--- `openmw.core#GameObject`, `#map<#string, #number>` with its spaces. Nil when `text` doesn't
+--- open with one.
+local function typePrefix(text: string): (string?, string)
+  if not string.find(text, '^[%w%._]*#') then return nil, text end
+
+  local depth, at = 0, 1
+  while at <= #text do
+    local character = string.sub(text, at, at)
+    if character == '<' then depth += 1 end
+    if character == '>' then depth -= 1 end
+    if depth == 0 and string.find(character, '%s') then break end
+
+    at += 1
+  end
+
+  return string.sub(text, 1, at - 1), (string.gsub(string.sub(text, at), '^%s*', ''))
+end
+
+--- Whether a parameter's description lets it be left out: it says optional, or what happens
+--- when the argument is omitted (core.l10n's `fallbackLocale`, "If omitted defaults to en").
+local function optionalIn(description: string): boolean
+  local lowered = string.lower(description)
+  return string.find(lowered, 'optional', 1, true) ~= nil or string.find(lowered, 'omitted', 1, true) ~= nil
+end
+
+--- A parameter's name and whether its description calls it optional anywhere: `(optional)`,
+--- `(Optional) ID of…`, `An optional table…`, and `a table … with an optional field` too, which
+--- errs on the side of allowing a call.
+local function parameter(text: string): (string, boolean)
+  local _, rest = typePrefix((string.gsub(text, '^%s*', '')))
+  local name = string.match(rest, '^(%S+)') or ''
+  return name, optionalIn(string.sub(rest, #name + 1))
+end
+
+--- The LDoc blocks of a spec file: each `---` comment's tag lines as written, and its description
+--- lines as `@text` tags of their own.
+local function blocks(text: string): { { string } }
+  local found: { { string } } = {}
+  local current: { string }? = nil
+  for line in string.gmatch(text .. '\n', '([^\n]*)\n') do
+    -- A block opens with `---`, alone or with the first line of its description after it.
+    local opening = string.match(line, '^%-%-%-%s*(.*)$')
+    if opening then
+      current = {}
+      table.insert(found, current :: { string })
+      if opening ~= '' then table.insert(current :: { string }, `@text {opening}`) end
+
+      continue
+    end
+
+    if not current then continue end
+
+    if not string.find(line, '^%-%-') then
+      current = nil
+      continue
+    end
+
+    local tag = string.match(line, '^%-%-%s*(@.*)$')
+    table.insert(current :: { string }, if tag then (string.gsub(tag, '%s+$', '')) else `@text {string.sub(line, 3)}`)
+  end
+
+  return found
+end
+
+-- The ordinals a function's description may call one of its arguments by.
+local Ordinals: { [string]: number } = table.freeze({
+  first = 1,
+  second = 2,
+  third = 3,
+  fourth = 4,
+  fifth = 5,
+} :: { [string]: number })
+
+local function spec(root: string, path: string): Spec
+  local result: Spec = { path = path, contexts = {}, types = {}, extends = {}, declared = {} }
+
+  local function membersOf(owner: string): { Member }
+    local members = result.types[owner]
+    if members then return members end
+
+    local created: { Member } = {}
+    result.types[owner] = created
+    return created
+  end
+
+  -- A name declared twice is an overload; the later declaration is the one kept (util.box).
+  local function place(owner: string, member: Member)
+    local members = membersOf(owner)
+    for index, existing in members do
+      if existing.name ~= member.name then continue end
+
+      members[index] = member
+      return
+    end
+
+    table.insert(members, member)
+  end
+
+  for _, tags in blocks(read(root, path)) do
+    local current: string? = nil
+    local opened: Function? = nil
+    local description: { string } = {}
+    -- The parameter whose description a line without a tag goes on with, if any.
+    local continuing: number? = nil
+    for _, tag in tags do
+      local name, matched = string.match(tag, '^@(%w+)%s*(.*)$')
+      if name ~= 'text' then continuing = nil end
+
+      local rest = matched or ''
+      if name == 'text' then
+        local open = opened
+        if continuing and open and optionalIn(rest) then open.optional[continuing :: number] = true end
+
+        if not continuing then table.insert(description, rest) end
+      elseif name == 'module' then
+        result.module = string.match(rest, '^(%S+)')
+        current = result.module
+      elseif name == 'context' then
+        result.contexts = string.split(string.match(rest, '^(%S+)') or '', '|')
+      elseif name == 'type' then
+        current = string.match(rest, '^(%S+)')
+        table.insert(result.declared, current :: string)
+        membersOf(current :: string)
+      elseif name == 'extends' and current then
+        result.extends[current] = result.extends[current] or {}
+        table.insert(result.extends[current], string.match(rest, '^(%S+)') :: string)
+      elseif name == 'field' then
+        local parent, remainder = string.match(rest, '^%[parent=#([^%]]+)%]%s*(.*)$')
+        local owner = parent or current
+        -- An enum's values may name no type: `@field Start`.
+        local fieldType, named = typePrefix(remainder or rest)
+        local fieldName = string.match(named, '^([%w_]+)')
+
+        if owner and fieldName then
+          place(owner, { kind = 'field', type = fieldType, parent = owner, name = fieldName, file = path })
+        end
+      elseif name == 'function' then
+        local parent, functionName = string.match(rest, '^%[parent=#([^%]]+)%]%s*([%w_]+)')
+        if parent and functionName then
+          opened = {
+            kind = 'function',
+            parent = parent,
+            name = functionName,
+            file = path,
+            params = {},
+            optional = {},
+            method = false,
+            vararg = false,
+          }
+          place(parent, opened :: Function)
+        end
+      elseif name == 'param' and opened then
+        local paramName, optional = parameter(rest)
+        local open = opened :: Function
+        if paramName == '...' then
+          open.vararg = true
+        elseif #open.params == 0 and not open.method and string.lower(paramName) == 'self' then
+          open.method = true
+        else
+          table.insert(open.params, paramName)
+          table.insert(open.optional, optional)
+          continuing = #open.params
+        end
+      end
+    end
+
+    -- A function's description may call an argument optional by its place: camera.setMode's
+    -- "if the second (optional, true by default) argument is set to false".
+    if opened then
+      local open = opened :: Function
+      for ordinal in string.gmatch(string.lower(table.concat(description, ' ')), '(%a+) %(optional') do
+        local index = Ordinals[ordinal]
+        if index and index <= #open.optional then open.optional[index] = true end
+      end
+    end
+  end
+
+  return result
+end
+
+--[[ The C++ that installs a package ]]
+
+export type ContextSet = { [string]: boolean }
+
+local function contextSet(names: { string }): ContextSet
+  local set: ContextSet = {}
+  for _, name in names do set[name] = true end
+
+  return set
+end
+
+--- The contexts of `set` in the contract's order.
+local function ordered(set: ContextSet): { string }
+  return [for name in Contexts if set[name] => name]
+end
+
+--- The arguments of a C++ call, from just after its `(`: the text up to the matching `)`, split at
+--- its top-level commas.
+local function callArguments(text: string, from: number): { string }
+  local arguments: { string } = {}
+  local depth, start = 0, from
+  for at = from, #text do
+    local character = string.sub(text, at, at)
+    if character == '(' or character == '<' or character == '{' or character == '[' then depth += 1 end
+
+    if (character == ')' or character == '>' or character == '}' or character == ']') and depth > 0 then
+      depth -= 1
+      continue
+    end
+
+    if character == ')' then
+      local last = string.sub(text, start, at - 1)
+      if string.find(last, '%S') then table.insert(arguments, last) end
+
+      break
+    end
+
+    if character == ',' and depth == 0 then
+      table.insert(arguments, string.sub(text, start, at - 1))
+      start = at + 1
+    end
+  end
+
+  return arguments
+end
+
+--- C++ without its comments, each replaced by a space so nothing else moves together.
+local function uncommented(text: string): string
+  local stripped = string.gsub(text, '/%*.-%*/', ' ')
+  return (string.gsub(stripped, '//[^\n]*', ' '))
+end
+
+--- The body of the C++ function `name` defines in `text`, between its braces; nil when `text`
+--- defines none.
+local function functionBody(text: string, name: string): string?
+  local at = 1
+  while true do
+    local start, finish = string.find(text, `[%s:]{name}%s*%(`, at)
+    if not start then return nil end
+
+    -- A definition's parameter list is followed by its body, `const` or not; a call's by `;`.
+    local close = string.find(text, ')', finish :: number, true)
+    local after = if close then string.sub(text, close + 1, close + 40) else ''
+    if string.find(after, '^%s*{') or string.find(after, '^%s*const%s*{') then
+      local open = string.find(text, '{', close :: number, true) :: number
+      local depth = 0
+      for index = open, #text do
+        local character = string.sub(text, index, index)
+        if character == '{' then depth += 1 end
+
+        if character == '}' then
+          depth -= 1
+          if depth == 0 then return string.sub(text, open + 1, index - 1) end
+        end
+      end
+    end
+
+    at = (finish :: number) + 1
+  end
+end
+
+--- The contexts a condition on `context.mType` allows, within `within`: `!= Context::Load`,
+--- `== Context::Menu`. Nil for any other condition, which allows what its scope does.
+local function condition(text: string, within: ContextSet): ContextSet?
+  local operator, name = string.match(text, 'context%.mType%s*([!=]=)%s*Context::(%a+)')
+  if not operator then return nil end
+
+  local named = string.lower(name :: string)
+  local allowed: ContextSet = {}
+  for context in within do
+    if (context == named) == (operator == '==') then allowed[context] = true end
+  end
+
+  return allowed
+end
+
+--- Every `<table>["name"] =` a C++ function body makes, with the contexts it is made in: those of
+--- `within`, narrowed by each `if (context.mType ...)` around it and the `else` after one, and by
+--- the same in a helper the body calls with the table (`addCoreTimeBindings(api, context)`).
+local function assignments(text: string, body: string, tableName: string, within: ContextSet, into: { [string]: ContextSet })
+  -- An if the reader has met: what it allows, and what its scope allowed, for an `else` after it.
+  type Branch = { allowed: ContextSet, parent: ContextSet }
+
+  -- The scopes a statement is in, innermost last, each with the if whose block it is, which an
+  -- `else` after its closing brace answers.
+  local scopes: { ContextSet }, opened: { Branch? } = { within }, { nil }
+  local pending: Branch? = nil
+  local finished: Branch? = nil
+  local position = 1
+
+  local function current(): ContextSet return scopes[#scopes] end
+
+  local function negate(branch: Branch): ContextSet
+    local rest: ContextSet = {}
+    for context in branch.parent do
+      if not branch.allowed[context] then rest[context] = true end
+    end
+
+    return rest
+  end
+
+  local function record(name: string, allowed: ContextSet)
+    into[name] = into[name] or {}
+    for context in allowed do into[name][context] = true end
+  end
+
+  while position <= #body do
+    local character = string.sub(body, position, position)
+    local rest = string.sub(body, position, position + 200)
+
+    if string.find(character, '%s') then
+      position += 1
+      continue
+    end
+
+    local ifCondition, afterIf = string.match(rest, '^if%s*(%b())()')
+    if ifCondition then
+      pending = { allowed = condition(ifCondition :: string, current()) or current(), parent = current() }
+      finished = nil
+      position += (afterIf :: number) - 1
+      continue
+    end
+
+    local afterElse = string.match(rest, '^else()%f[%W]')
+    if afterElse and finished then
+      local branch = finished :: Branch
+      pending = { allowed = negate(branch), parent = branch.parent }
+      finished = nil
+      position += (afterElse :: number) - 1
+      continue
+    end
+
+    if character == '{' then
+      local branch = pending
+      table.insert(scopes, if branch then branch.allowed else current())
+      table.insert(opened, branch)
+      pending, finished = nil, nil
+      position += 1
+      continue
+    end
+
+    if character == '}' then
+      if #scopes > 1 then
+        table.remove(scopes)
+        finished = table.remove(opened)
+      end
+
+      position += 1
+      continue
+    end
+
+    -- A statement runs to the `;` outside any bracket, a lambda's body and all: what a lambda
+    -- does happens when it is called. An if's lone statement runs where its condition allows.
+    local depth, finish = 0, #body
+    for index = position, #body do
+      local at = string.sub(body, index, index)
+      if at == '(' or at == '{' or at == '[' then depth += 1 end
+      if at == ')' or at == '}' or at == ']' then depth -= 1 end
+
+      if at == ';' and depth == 0 then
+        finish = index
+        break
+      end
+    end
+
+    local statement = string.sub(body, position, finish)
+    local branch = pending
+    local allowed = if branch then branch.allowed else current()
+    pending, finished = nil, branch
+
+    local name = string.match(statement, `^{tableName}%["([%w_]+)"%]%s*=`)
+    if name then record(name :: string, allowed) end
+
+    -- A helper handed the table installs into it: `registerLifeTime(view, res)`.
+    local helper, arguments = string.match(statement, '^([%w_]+)%((.*)%)%s*;$')
+    local handed = false
+    for argument in string.gmatch(arguments or '', '[^,]+') do
+      if string.match(argument, '^%s*(.-)%s*$') == tableName then handed = true end
+    end
+
+    local helperBody = if handed then functionBody(text, helper :: string) else nil
+    if helperBody then assignments(text, helperBody :: string, tableName, allowed, into) end
+
+    position = finish + 1
+  end
+end
+
+--- The members a package's C++ installs only in some contexts, by module: `openmw.core`'s from
+--- initCorePackage, whose conditions on the context say where, and `openmw.storage`'s from the
+--- init<Context>Package function of each context. Each says which file it was read from.
+local function memberContexts(root: string): { [string]: { source: string, members: { [string]: ContextSet } } }
+  local found: { [string]: { source: string, members: { [string]: ContextSet } } } = {}
+
+  local corePath = 'apps/openmw/mwlua/corebindings.cpp'
+  local core = uncommented(read(root, corePath))
+  local coreMembers: { [string]: ContextSet } = {}
+  local coreBody = functionBody(core, 'initCorePackage')
+  if coreBody then assignments(core, coreBody :: string, 'api', contextSet(Contexts), coreMembers) end
+
+  found['openmw.core'] = { source = corePath, members = coreMembers }
+
+  local storagePath = 'components/lua/storage.cpp'
+  local storage = uncommented(read(root, storagePath))
+  local storageMembers: { [string]: ContextSet } = {}
+  for _, context in Contexts do
+    local initializer = `init{string.upper(string.sub(context, 1, 1))}{string.sub(context, 2)}Package`
+    local body = functionBody(storage, initializer)
+    if body then assignments(storage, body :: string, 'res', contextSet { context }, storageMembers) end
+  end
+
+  found['openmw.storage'] = { source = storagePath, members = storageMembers }
+  return found
+end
+
+--- Whether each storage section accessor hands out a section a script may change, in each context
+--- that has it: storage.cpp's init<Context>Package returning getMutableSection or getReadOnlySection.
+local function storageMutability(root: string): { [string]: { [string]: string } }
+  local storage = uncommented(read(root, 'components/lua/storage.cpp'))
+  local found: { [string]: { [string]: string } } = {}
+  for _, context in Contexts do
+    local initializer = `init{string.upper(string.sub(context, 1, 1))}{string.sub(context, 2)}Package`
+    local body = functionBody(storage, initializer)
+    if not body then continue end
+
+    for name, accessor in string.gmatch(body :: string, 'res%["(%w+Section)"%][^;]-%->get(%w+)Section') do
+      found[name] = found[name] or {}
+      found[name][context] = if accessor == 'Mutable' then 'mutable' else 'readonly'
+    end
+  end
+
+  return found
+end
+
+--[[ A module's members ]]
+
+export type Record = { [string]: unknown }
+
+-- How many times one type may recur along a member's path before its members stop being listed,
+-- and how many names a path may have: GameObject.parentContainer is a GameObject, so without a
+-- bound its members never end.
+local Recurrence, Depth = 10, 11
+
+--- Every spec, by the module path a type reference names it with: `openmw.core` for core.lua.
+export type Specs = { [string]: Spec }
+
+--- The spec and type a reference names, from `file`: `#Cell` is file's own, `openmw.core#Cell`
+--- core.lua's. Nil for a reference to anything else (`#number`, `#list<#Record>`, a script's).
+local function resolve(specs: Specs, file: string, reference: string): (Spec?, string?)
+  local modulePath, typeName = string.match(reference, '^([%w%._]*)#([%w_]+)$')
+  if not typeName then return nil, nil end
+
+  local owner = if modulePath == '' then specs[file] else specs[modulePath :: string]
+  if not owner or not owner.types[typeName :: string] then return nil, nil end
+
+  return owner, typeName
+end
+
+--- A type's members, its own first and then those of what it extends, each name once, with how
+--- many `@extends` each was reached through.
+local function membersOf(specs: Specs, owner: Spec, typeName: string): ({ Member }, { number })
+  local found: { Member }, hops: { number } = {}, {}
+  local seen: { [string]: boolean } = {}
+
+  local function add(from: Spec, name: string, depth: number)
+    if depth > 8 then return end
+
+    for _, member in from.types[name] or {} do
+      if seen[member.name] then continue end
+
+      seen[member.name] = true
+      table.insert(found, member)
+      table.insert(hops, depth)
+    end
+
+    for _, extended in from.extends[name] or {} do
+      local base, baseName = resolve(specs, from.path, extended)
+      if base and baseName then add(base, baseName, depth + 1) end
+    end
+  end
+
+  add(owner, typeName, 0)
+  return found, hops
+end
+
+local function functionRecord(member: Function): Record
+  local required = 0
+  for _, optional in member.optional do
+    if not optional then required += 1 end
+  end
+
+  return {
+    kind = 'function',
+    params = table.clone(member.params),
+    minArgs = required,
+    maxArgs = #member.params,
+    method = member.method,
+    vararg = member.vararg,
+  }
+end
+
+--- A module's members: those of the module's own type, each field's type's members under it by
+--- path (`cell.getAll`), until a type has recurred Recurrence times along the path or the path is
+--- Depth deep, a member reached through `@extends` counting one deeper for each.
+local function moduleMembers(specs: Specs, owner: Spec, typeName: string): { [string]: Record }
+  local members: { [string]: Record } = {}
+
+  local function emit(prefix: string, from: Spec, name: string, chain: { [string]: number }, level: number)
+    local found, hops = membersOf(specs, from, name)
+    for index, member in found do
+      local depth = level + hops[index]
+      local key = prefix .. member.name
+      if members[key] then continue end
+
+      if member.kind == 'function' then
+        members[key] = functionRecord(member)
+        continue
+      end
+
+      local field = member :: Field
+      local record: Record = { kind = 'field', type = field.type }
+      members[key] = record
+      if not field.type then continue end
+
+      -- A field of a type the spec declares expands into that type's members, even none.
+      local target, targetName = resolve(specs, field.file, field.type :: string)
+      if not target or not targetName then continue end
+
+      record.expands = true
+      local spelled = field.type :: string
+      local seen = (chain[spelled] or 0) + 1
+      if seen >= Recurrence or depth >= Depth then continue end
+
+      local deeper = table.clone(chain)
+      deeper[spelled] = seen
+      emit(`{key}.`, target, targetName, deeper, depth + 1)
+    end
+  end
+
+  emit('', owner, typeName, {}, 1)
+  return members
+end
+
+
+--- The C++ that builds a package's table, and the file it is in: the function luabindings.cpp's
+--- maps build `openmw.<name>` with (`{ "openmw.nearby", initNearbyPackage(context) }`), wherever it
+--- is defined, and for openmw.self, localscripts.cpp, whose selfAPI is that package. Nil for a
+--- package built anywhere else.
+local function packageSource(root: string, module: string): (string?, string?)
+  if module == 'openmw.self' then
+    local path = 'apps/openmw/mwlua/localscripts.cpp'
+    return uncommented(read(root, path)), path
+  end
+
+  local bindings = uncommented(read(root, 'apps/openmw/mwlua/luabindings.cpp'))
+  local initializer = string.match(bindings, `"{string.gsub(module, '%.', '%%.')}"%s*,%s*[%w_:]-([%w_]+)%(`)
+  if not initializer then return nil, nil end
+
+  local names = fs.list(fs.join(root, 'apps/openmw/mwlua')) or {}
+  table.sort(names)
+  for _, name in names do
+    if not string.find(name, '%.cpp$') then continue end
+
+    local path = `apps/openmw/mwlua/{name}`
+    local body = functionBody(uncommented(read(root, path)), initializer :: string)
+    if body then return body, path end
+  end
+
+  return nil, nil
+end
+
+--- The all-caps tables a module's spec declares as types without making them members, which the
+--- C++ that builds the package installs by that name all the same: `self.ATTACK_TYPE`, whose
+--- values the spec only reaches through `controls.use`, and `nearby.NAVIGATOR_FLAGS`. A table
+--- the package doesn't install by its type's name (`util.COLOR`, which is `util.color`, and
+--- `core.MOON_PHASE`, which is `core.weather`'s) is left alone. Answers the file that showed them.
+local function installedTables(root: string, module: string, owner: Spec, typeName: string): ({ string }, string?)
+  local members: { [string]: boolean } = {}
+  for _, member in owner.types[typeName] or {} do members[member.name] = true end
+
+  local candidates = [for name in owner.declared if string.find(name, '^[A-Z][A-Z0-9_]*$') and not members[name] => name]
+  if #candidates == 0 then return {}, nil end
+
+  local source, path = packageSource(root, module)
+  if not source then return {}, nil end
+
+  local tables = [for candidate in candidates if string.find(source :: string, `%["{candidate}"%]%s*=`) => candidate]
+  return tables, if #tables > 0 then path else nil
+end
+
+--[[ Where packages and engine handlers are installed ]]
+
+-- What each container the C++ hands packages to runs: luamanagerimp.cpp fills mGlobalScripts,
+-- mMenuScripts and mLoadScripts, keeps mLocalPackages and mPlayerPackages for local and player
+-- scripts, and gives every context mLua's common packages.
+local Containers: { [string]: { string } } = table.freeze({
+  mGlobalScripts = { 'global' },
+  mMenuScripts = { 'menu' },
+  mLoadScripts = { 'load' },
+  mLocalPackages = { 'local' },
+  mPlayerPackages = { 'player' },
+  mLua = { 'global', 'local', 'player', 'menu', 'load' },
+} :: { [string]: { string } })
+
+-- What the C++ can't say in a line: scriptscontainer.cpp builds openmw.interfaces when a container
+-- loads its scripts or a save, which the load container never does, so load scripts have no
+-- interfaces and nothing calls their onInterfaceOverride.
+local WithoutInterfaces = 'load'
+
+--- The contexts each `openmw.*` package is installed in: luabindings.cpp's init*Packages maps, as
+--- luamanagerimp.cpp hands them to each container, openmw.storage, which it adds to each, and
+--- openmw.self, which localscripts.cpp adds for local scripts, player scripts being local ones.
+local function moduleContexts(root: string): { [string]: ContextSet }
+  local bindings = uncommented(read(root, 'apps/openmw/mwlua/luabindings.cpp'))
+  local manager = uncommented(read(root, 'apps/openmw/mwlua/luamanagerimp.cpp'))
+  local found: { [string]: ContextSet } = {}
+
+  local function add(module: string, contexts: { string })
+    found[module] = found[module] or {}
+    for _, context in contexts do found[module][context] = true end
+  end
+
+  local mapContents: { [string]: { string } } = {}
+  for name in string.gmatch(bindings, 'std::map<std::string, sol::object>%s+(init%w+Packages)%s*%(') do
+    local body = functionBody(bindings, name) or ''
+    local modules: { string } = {}
+    for module in string.gmatch(body, '"(openmw%.[%w_]+)"') do table.insert(modules, module) end
+
+    mapContents[name] = modules
+  end
+
+  local handed: { [string]: { string } } = {}
+  local function hand(map: string, target: string)
+    handed[map] = handed[map] or {}
+    table.insert(handed[map], target)
+  end
+
+  for map, target in string.gmatch(manager, ':%s*(init%w+Packages)%([^)]*%)%)%s*([%w_]+)%.add') do
+    hand(map :: string, target :: string)
+  end
+
+  for target, map in string.gmatch(manager, '([%w_]+)%s*=%s*(init%w+Packages)%(') do hand(map :: string, target :: string) end
+
+  -- Player scripts take the local packages as well: mPlayerPackages.insert(mLocalPackages...).
+  local inherits: { [string]: { string } } = {}
+  for target, source in string.gmatch(manager, '([%w_]+)%.insert%(%s*([%w_]+)%.begin%(%)') do
+    local heir, from = target :: string, source :: string
+    inherits[from] = inherits[from] or {}
+    table.insert(inherits[from], heir)
+  end
+
+  local function contextsOf(target: string): { string }
+    local contexts = table.clone(Containers[target] or {})
+    for _, heir in inherits[target] or {} do
+      for _, context in Containers[heir] or {} do table.insert(contexts, context) end
+    end
+
+    return contexts
+  end
+
+  for map, targets in handed do
+    for _, target in targets do
+      for _, module in mapContents[map] or {} do add(module, contextsOf(target)) end
+    end
+  end
+
+  for target in string.gmatch(manager, '([%w_]+)%.addPackage%(%s*"openmw%.storage"') do add('openmw.storage', contextsOf(target)) end
+  for target in string.gmatch(manager, '([%w_]+)%["openmw%.storage"%]%s*=') do add('openmw.storage', contextsOf(target)) end
+
+  if string.find(read(root, 'apps/openmw/mwlua/localscripts.cpp'), 'addPackage%("openmw%.self"') then
+    add('openmw.self', { 'local', 'player' })
+  end
+
+  add('openmw.interfaces', [for context in Contexts if context ~= WithoutInterfaces => context])
+  return found
+end
+
+-- The headers that declare engine handlers, in the order a handler several declare is credited
+-- to the first, and the contexts the container each declares them for runs in: a player script is
+-- a local one, and InputProcessor serves the player and menu containers.
+local HandlerHeaders: { { path: string, contexts: { string } } } = {
+  { path = 'components/lua/scriptscontainer.hpp', contexts = { 'global', 'local', 'player', 'menu', 'load' } },
+  { path = 'apps/openmw/mwlua/localscripts.hpp', contexts = { 'local', 'player' } },
+  { path = 'apps/openmw/mwlua/globalscripts.hpp', contexts = { 'global' } },
+  { path = 'apps/openmw/mwlua/playerscripts.hpp', contexts = { 'player' } },
+  { path = 'apps/openmw/mwlua/menuscripts.hpp', contexts = { 'menu' } },
+  { path = 'apps/openmw/mwlua/loadscripts.hpp', contexts = { 'load' } },
+  { path = 'apps/openmw/mwlua/inputprocessor.hpp', contexts = { 'player', 'menu' } },
+}
+
+-- Handlers the engine calls every frame, from ScriptsContainer::update and the player and menu
+-- containers' onFrame: a table made in one is made sixty times a second.
+local HotHandlers: { [string]: boolean } = table.freeze({ onUpdate = true, onFrame = true } :: { [string]: boolean })
+
+export type Handler = { argsMin: number, argsMax: number, contexts: ContextSet, source: string }
+
+--- Every engine handler: the EngineHandlerList each header declares, with the argument counts of
+--- every callEngineHandlers it is called with, and the four scriptscontainer.cpp finds by name
+--- (onInit, onLoad, onSave, onInterfaceOverride), counted from the LuaUtil::call that calls each.
+local function engineHandlers(root: string): { [string]: Handler }
+  local handlers: { [string]: Handler } = {}
+
+  local function add(name: string, count: number, contexts: { string }, source: string)
+    local handler = handlers[name]
+    if not handler then
+      handler = { argsMin = count, argsMax = count, contexts = {}, source = source }
+      handlers[name] = handler
+    end
+
+    local known = handler :: Handler
+    known.argsMin = math.min(known.argsMin, count)
+    known.argsMax = math.max(known.argsMax, count)
+    for _, context in contexts do known.contexts[context] = true end
+  end
+
+  for _, header in HandlerHeaders do
+    local text = uncommented(read(root, header.path))
+    local names: { [string]: string } = {}
+    for variable, name in string.gmatch(text, 'EngineHandlerList%s+([%w_]+)%s*{%s*"([%w_]+)"%s*}') do
+      names[variable] = name
+    end
+
+    -- A header's handlers may be called from its source file too: localscripts.cpp calls onActive.
+    local sibling = fs.readFile(fs.join(root, (string.gsub(header.path, '%.hpp$', '.cpp'))))
+    if sibling then text ..= '\n' .. uncommented(buffer.tostring(sibling)) end
+
+    for open in string.gmatch(text, 'callEngineHandlers%(()') do
+      local arguments = callArguments(text, open :: number)
+      local variable = arguments[1] and string.match(arguments[1], '^%s*([%w_]+)%s*$')
+      local name = variable and names[variable]
+      if name then add(name, #arguments - 1, header.contexts, header.path) end
+    end
+  end
+
+  local containerPath = 'components/lua/scriptscontainer.cpp'
+  local container = uncommented(read(root, containerPath))
+  local constants: { [string]: string } = {}
+  for constant, name in string.gmatch(container, '(HANDLER_[%w_]+)%s*=%s*"([%w_]+)"') do
+    constants[constant :: string] = name :: string
+  end
+
+  for constant, variable in string.gmatch(container, 'handlerName%s*==%s*(HANDLER_[%w_]+)%)%s*([%w_%.]+)%s*=%s*std::move') do
+    local name = constants[constant :: string]
+    local field = string.match(variable :: string, '([%w_]+)$') :: string
+    local contexts: { string } = if name == 'onInterfaceOverride'
+      then [for context in Contexts if context ~= WithoutInterfaces => context]
+      else table.clone(Contexts)
+    for open in string.gmatch(container, 'LuaUtil::call%(()') do
+      local arguments = callArguments(container, open :: number)
+      local called = arguments[2] and string.match(arguments[2], '([%w_]+)%s*$')
+      if name and called == field then add(name, #arguments - 2, contexts, containerPath) end
+    end
+  end
+
+  return handlers
+end
+
+--[[ Interfaces ]]
+
+-- A builtin script's tag, as the context it runs in: an object's kind or CUSTOM attaches a local
+-- script.
+local Tags: { [string]: string } = table.freeze({
+  GLOBAL = 'global',
+  PLAYER = 'player',
+  MENU = 'menu',
+  LOAD = 'load',
+} :: { [string]: string })
+
+export type Provider = { line: number, manifest: string, path: string }
+export type Interface = { contexts: ContextSet, providers: { Provider } }
+
+--- The builtin manifests, in the order OpenMW appends them: data's, then data-mw's.
+local Manifests = { 'files/data/builtin.omwscripts', 'files/data-mw/builtin.omwscripts.in' }
+
+--- Every interface a builtin script provides (`interfaceName = 'Combat'` in what it returns), with
+--- the scripts that provide it in manifest order and the contexts they run in.
+local function interfaces(root: string): { [string]: Interface }
+  local found: { [string]: Interface } = {}
+  for _, manifest in Manifests do
+    local folder = string.match(manifest, '^(.*)/[^/]*$') :: string
+    local number = 0
+    for line in string.gmatch(read(root, manifest) .. '\n', '([^\n]*)\n') do
+      number += 1
+      local tags, script = string.match(line, '^%s*([%u_,%s]+):%s*(%S+)%s*$')
+      if not tags then continue end
+
+      local path = `{folder}/{script}`
+      local data = fs.readFile(fs.join(root, path))
+      local name = data and string.match(buffer.tostring(data), 'interfaceName%s*=%s*[\'"]([%w_]+)[\'"]')
+      if not name then continue end
+
+      local interface = found[name] or { contexts = {}, providers = {} }
+      found[name] = interface
+      table.insert(interface.providers, { line = number, manifest = manifest, path = path })
+      for tag in string.gmatch(tags :: string, '[%u_]+') do interface.contexts[Tags[tag] or 'local'] = true end
+    end
+  end
+
+  return found
+end
+
+--[[ Record types ]]
+
+--- The record tag each TES3 object type's Lua name stands for: types.cpp's luaObjectTypeInfo, its
+--- four-letter `REC_` entries, the names resolved through ObjectTypeName (`MiscItem` is
+--- `Miscellaneous`).
+local function objectTypeTags(root: string): { [string]: string }
+  local text = uncommented(read(root, 'apps/openmw/mwlua/types/types.cpp'))
+  local names: { [string]: string } = {}
+  for constant, name in string.gmatch(text, 'constexpr std::string_view ([%w_]+)%s*=%s*"([^"]+)"') do
+    names[constant :: string] = name :: string
+  end
+
+  local tags: { [string]: string } = {}
+  for tag, constant in string.gmatch(text, '{%s*ESM::REC_([%w_]+)%s*,%s*ObjectTypeName::([%w_]+)%s*}') do
+    local record, name = tag :: string, names[constant :: string]
+    if #record == 4 and not string.find(record, '%d') and name then tags[name] = record end
+  end
+
+  return tags
+end
+
+--[[ What the tree is ]]
+
+local function cmakeValue(text: string, name: string): string?
+  return (string.match(text, `set%({name}%s+([^%s%)]+)%)`))
+end
+
+--- The OpenMW version and the Lua and postprocessing API revisions, from CMakeLists.txt.
+local function sourceVersion(root: string): Record
+  local text = read(root, 'CMakeLists.txt')
+  local version = [for part in { 'MAJOR', 'MINOR', 'RELEASE' } => cmakeValue(text, `OPENMW_VERSION_{part}`) or '0']
+  return {
+    openmwVersion = table.concat(version, '.'),
+    luaApiRevision = tonumber(cmakeValue(text, 'OPENMW_LUA_API_REVISION')),
+    postprocessingApiRevision = tonumber(cmakeValue(text, 'OPENMW_POSTPROCESSING_API_REVISION')),
+  }
+end
+
+--- The builtin Lua's paths under `root`, sorted: every .lua under files/data and files/data-mw.
+local function corpus(root: string): { string }
+  local found: { string } = {}
+  for _, folder in { 'files/data', 'files/data-mw' } do
+    local walked = fs.walk(fs.join(root, folder))
+    for _, path in if walked then walked.paths else {} do
+      if string.find(path, '%.lua$') then table.insert(found, `{folder}/{path}`) end
+    end
+  end
+
+  table.sort(found)
+  return found
+end
+
+--- One SHA-256 for the builtin Lua: of each file's path and digest, a line each, in path order.
+local function corpusDigest(root: string, paths: { string }): string
+  local lines = [for path in paths => `{path} {bytes.sha256(read(root, path))}`]
+  return bytes.sha256(table.concat(lines, '\n') .. '\n')
+end
+
+--[[ Engine-internal members ]]
+
+--- The members OpenMW's own Lua uses that its spec doesn't list, by module, each with the scripts
+--- that use it: the facts the workbench's own reading makes of the builtin scripts, as it makes
+--- them of a mod's, so each is one a review can meet.
+local function internalMembers(root: string, modules: { [string]: { [string]: Record } }): { [string]: { [string]: Record } }
+  local model = require '@openmw-install/workbench/model' :: any
+  local project = model.build({ fs.join(root, 'files/data'), fs.join(root, 'files/data-mw') })
+  local found: { [string]: { [string]: { [string]: boolean } } } = {}
+  local prefix = fs.join(root, '')
+  for _, script in project.scripts do
+    local path = string.gsub(script.path, '\\', '/')
+    local relative = if string.sub(path, 1, #prefix) == prefix then string.sub(path, #prefix + 1) else path
+    for _, fact in script.source.members do
+      local module, member = fact.module, fact.member
+      if type(module) ~= 'string' or type(member) ~= 'string' then continue end
+      if not string.find(module, '^openmw%.') then continue end
+
+      local members = modules[module]
+      if not members or members[member] then continue end
+
+      found[module] = found[module] or {}
+      found[module][member] = found[module][member] or {}
+      found[module][member][relative] = true
+    end
+  end
+
+  local result: { [string]: { [string]: Record } } = {}
+  for module, members in found do
+    result[module] = {}
+    for member, paths in members do
+      local sources: { string } = {}
+      for path in paths do table.insert(sources, path) end
+
+      -- data's scripts before data-mw's, as OpenMW appends them, and by path within each.
+      table.sort(sources, function(left: string, right: string): boolean
+        local leftGame, rightGame = string.find(left, '^files/data%-mw/') ~= nil, string.find(right, '^files/data%-mw/') ~= nil
+        if leftGame ~= rightGame then return rightGame end
+
+        return left < right
+      end)
+      result[module][member] = { sources = sources }
+    end
+  end
+
+  return result
+end
+
+--[[ Writing the contract ]]
+
+local function quoted(text: string): string
+  return `'{string.gsub(string.gsub(text, '\\', '\\\\'), "'", "\\'")}'`
+end
+
+local function scalar(value: unknown): string
+  if type(value) == 'string' then return quoted(value) end
+
+  if type(value) == 'number' and value % 1 == 0 then return string.format('%d', value) end
+
+  return tostring(value)
+end
+
+local function isList(value: { [unknown]: unknown }): boolean
+  local count = 0
+  for _ in value do count += 1 end
+
+  return count > 0 and #(value :: { unknown }) == count
+end
+
+--- A value as a Luau literal: keys sorted, a list of scalars on one line.
+local function render(value: unknown, indent: string): string
+  if type(value) ~= 'table' then return scalar(value) end
+
+  local tableValue = value :: { [unknown]: unknown }
+  if next(tableValue) == nil then return '{}' end
+
+  local inner = `{indent}  `
+  if isList(tableValue) then
+    local items = value :: { unknown }
+    local nested = false
+    for _, item in items do
+      if type(item) == 'table' then nested = true end
+    end
+
+    if not nested then return `\{ {table.concat([for item in items => scalar(item)], ', ')} }` end
+
+    local lines = [for item in items => `{inner}{render(item, inner)},`]
+    return `\{\n{table.concat(lines, '\n')}\n{indent}}`
+  end
+
+  local keys: { string } = {}
+  for key in tableValue do table.insert(keys, tostring(key)) end
+
+  table.sort(keys)
+  local lines = [for key in keys => `{inner}[{quoted(key)}] = {render(tableValue[key], inner)},`]
+  return `\{\n{table.concat(lines, '\n')}\n{indent}}`
+end
+
+--[[ The contract ]]
+
+local function contract(root: string): (Record, { string })
+  local sources: { string } = {}
+  local function readFrom(path: string)
+    if not table.find(sources, path) then table.insert(sources, path) end
+  end
+
+  local specs: Specs = {}
+  local files = fs.list(fs.join(root, 'files/lua_api/openmw')) or {}
+  table.sort(files)
+  for _, name in files do
+    if not string.find(name, '%.lua$') then continue end
+
+    local path = `files/lua_api/openmw/{name}`
+    local parsed = spec(root, path)
+    specs[`openmw.{string.gsub(name, '%.lua$', '')}`] = parsed
+    specs[path] = parsed
+    readFrom(path)
+  end
+
+  local contexts = moduleContexts(root)
+  local contextual = memberContexts(root)
+  local modules: Record = {}
+  local membersByModule: { [string]: { [string]: Record } } = {}
+  for _, name in files do
+    if not string.find(name, '%.lua$') then continue end
+
+    local modulePath = `openmw.{string.gsub(name, '%.lua$', '')}`
+    local owner = specs[modulePath]
+    local typeName = owner.module
+    if not typeName then continue end
+
+    local tables, confirmedBy = installedTables(root, modulePath, owner, typeName :: string)
+    for _, tableName in tables do
+      local installed: Field = { kind = 'field', type = `#{tableName}`, parent = typeName :: string, name = tableName, file = owner.path }
+      table.insert(owner.types[typeName :: string], installed)
+    end
+
+    if confirmedBy then readFrom(confirmedBy :: string) end
+
+    local members = moduleMembers(specs, owner, typeName :: string)
+    local installed = contextual[modulePath]
+    if installed then
+      for member, set in installed.members do
+        local record = members[member]
+        if not record then continue end
+
+        record.contexts = ordered(set)
+        record.contextSource = installed.source
+      end
+    end
+
+    membersByModule[modulePath] = members
+    modules[modulePath] = {
+      spec = owner.path,
+      sha256 = bytes.sha256(read(root, owner.path)),
+      declaredContexts = owner.contexts,
+      contexts = ordered(contexts[modulePath] or {}),
+      members = members,
+    }
+  end
+
+  local found = interfaces(root)
+  local interfaceMembers: Record = {}
+  for name, interface in found do
+    interfaceMembers[name] = { contexts = ordered(interface.contexts), providers = interface.providers }
+  end
+
+  local interfacesModule = modules['openmw.interfaces'] :: Record?
+  if interfacesModule then interfacesModule.interfaceMembers = interfaceMembers end
+
+  local handlers: Record = {}
+  for name, handler in engineHandlers(root) do
+    local record: Record = {
+      argsMin = handler.argsMin,
+      argsMax = handler.argsMax,
+      contexts = ordered(handler.contexts),
+      source = handler.source,
+    }
+
+    if HotHandlers[name] then record.hot = true end
+
+    handlers[name] = record
+  end
+
+  local paths = corpus(root)
+  local source = sourceVersion(root)
+  source.builtinLuaCorpusSha256 = corpusDigest(root, paths)
+
+  for _, path in {
+    'CMakeLists.txt',
+    'apps/openmw/mwlua/corebindings.cpp',
+    'apps/openmw/mwlua/luabindings.cpp',
+    'apps/openmw/mwlua/luamanagerimp.cpp',
+    'apps/openmw/mwlua/localscripts.cpp',
+    'apps/openmw/mwlua/types/types.cpp',
+    'components/lua/scriptscontainer.cpp',
+    'components/lua/storage.cpp',
+  } do
+    readFrom(path)
+  end
+
+  for _, header in HandlerHeaders do
+    readFrom(header.path)
+    local sibling = (string.gsub(header.path, '%.hpp$', '.cpp'))
+    if fs.isFile(fs.join(root, sibling)) then readFrom(sibling) end
+  end
+
+  for _, manifest in Manifests do readFrom(manifest) end
+
+  local provenance: Record = {}
+  for _, path in sources do provenance[path] = bytes.sha256(read(root, path)) end
+
+  return {
+    engineHandlers = handlers,
+    engineInternalMembers = internalMembers(root, membersByModule),
+    modules = modules,
+    objectTypeTags = objectTypeTags(root),
+    provenance = provenance,
+    source = source,
+    storageMutability = storageMutability(root),
+  },
+    sources
+end
+
+local root, output = ...
+assert(type(root) == 'string', 'usage: jess run --trusted --package . --package-path .jess/packages tools/contract.jsl -- <openmw source tree> [output]')
+
+local generated = contract(root)
+local version = generated.source :: Record
+local text = table.concat({
+  '--!strict',
+  `-- GENERATED by tools/contract.jsl from an OpenMW {tostring(version.openmwVersion)} tree (Lua API revision {tostring(version.luaApiRevision)}).`,
+  '-- Do not hand-edit contract facts: change the generator, or the tree it reads, and run it again.',
+  '-- Source of truth: files/lua_api/openmw, MWLua package construction/handler call sites,',
+  "-- storage package construction, and OpenMW's own builtin Lua script registrations.",
+  '',
+  `local Contract = {render(generated, '')}`,
+  '',
+  'return table.freeze(Contract)',
+  '',
+}, '\n')
+
+local written, problem = fs.writeFile(output or 'src/contract.jsl', text, { atomic = true })
+if not written then error(problem, 0) end
